@@ -22,6 +22,8 @@
 
 // important to use the right CPUT namespace
 
+extern float3 gLightDir;
+
 void UpdateConstantBuffer(ID3D11DeviceContext *pDeviceCtx, ID3D11Buffer *pCB, const void *pData, size_t DataSize);
 
 class CParallelLightCamera : public CPUTCamera
@@ -702,26 +704,11 @@ float COutdoorLightScatteringSample::GetSceneExtent()
     return 10000;
 }
 
-// Handle OnCreation events
-//-----------------------------------------------------------------------------
-void COutdoorLightScatteringSample::Create()
-{    
-    CPUTAssetLibrary*       pAssetLibrary   = CPUTAssetLibrary::GetAssetLibrary();
+void COutdoorLightScatteringSample::InitializeGUI()
+{
     CPUTGuiControllerDX11*  pGUI            = CPUTGetGuiController();
 
     pGUI->DrawFPS(true);
-
-    HRESULT hr;
-	LPCWSTR ConfigPath = L"Default_Config.txt";
-    if( FAILED(ParseConfigurationFile( ConfigPath )) )
-    {
-        LOG_ERROR(_T("Failed to load config file %s"), ConfigPath );
-        return;
-    }
-
-    /*
-    * Initialize GUI
-    */
 
     static_assert( _countof(m_pSelectPanelDropDowns) == _countof(CONTROL_PANEL_IDS), "Incorrect size of m_pSelectPanelDropDowns" );
     for(int iPanel=0; iPanel < _countof(CONTROL_PANEL_IDS); ++iPanel)
@@ -1100,23 +1087,10 @@ void COutdoorLightScatteringSample::Create()
     // Make the main panel active
     //
     pGUI->SetActivePanel(CONTROL_PANEL_IDS[m_uiSelectedPanelInd]);
+}
 
-    CreateTmpBackBuffAndDepthBuff(mpD3dDevice);
-
-    // Create shadow map before other assets!!!
-    HRESULT hResult = CreateShadowMap(mpD3dDevice);
-    if( FAILED( hResult ) )
-        return;
-
-    pAssetLibrary->SetMediaDirectoryName(  _L("Media\\"));
-
-    // Add our programatic (and global) material parameters
-    CPUTMaterial::mGlobalProperties.AddValue( _L("cbPerFrameValues"), _L("$cbPerFrameValues") );
-    CPUTMaterial::mGlobalProperties.AddValue( _L("cbPerModelValues"), _L("#cbPerModelValues") );
-
-    int width, height;
-    CPUTOSServices::GetOSServices()->GetClientDimensions(&width, &height);
-
+void COutdoorLightScatteringSample::CreateDefaultRenderStatesBlock()
+{
     CPUTRenderStateBlockDX11 *pBlock = new CPUTRenderStateBlockDX11();
     CPUTRenderStateDX11 *pStates = pBlock->GetState();
 
@@ -1129,17 +1103,10 @@ void COutdoorLightScatteringSample::Create()
     CPUTAssetLibrary::GetAssetLibrary()->AddRenderStateBlock( _L("$DefaultRenderStates"), pBlock );
     
     pBlock->Release(); // We're done with it.  The library owns it now.
+}
 
-    // Initialize
-    mpCamera = new CPUTCamera();
-    CPUTAssetLibraryDX11::GetAssetLibrary()->AddCamera( _L("Outdoor light scattering sample camera"), mpCamera );
-
-    // Set the projection matrix for all of the cameras to match our window.
-    mpCamera->SetAspectRatio(((float)width)/((float)height));
- 
-    mpCamera->SetFov( XMConvertToRadians(45.0f) );
-    mpCamera->SetFarPlaneDistance(1e+7);
-    mpCamera->SetNearPlaneDistance(50.0f);
+void COutdoorLightScatteringSample::CreateViewCamera(int screenWidth, int screenHeight)
+{
     float4x4 InitialWorldMatrix
     (
 		 -0.88250709f,  0.00000000f,  0.47029909f, 0.0000000f,
@@ -1148,18 +1115,25 @@ void COutdoorLightScatteringSample::Create()
 		          0.f,   8023.6152f,          0.f, 1.0000000f 
     );
 
+    mpCamera = new CPUTCamera();
+    // Set the projection matrix for all of the cameras to match our window.
+    mpCamera->SetAspectRatio(((float)screenWidth)/((float)screenHeight)); 
+    mpCamera->SetFov( XMConvertToRadians(45.0f) );
+    mpCamera->SetFarPlaneDistance(1e+7);
+    mpCamera->SetNearPlaneDistance(50.0f);
     mpCamera->SetParentMatrix(InitialWorldMatrix);
     mpCamera->Update();
+
+    CPUTAssetLibraryDX11::GetAssetLibrary()->AddCamera( _L("Outdoor light scattering sample camera"), mpCamera );
 
     mpCameraController = new CPUTCameraControllerFPS();
     mpCameraController->SetCamera(mpCamera);
     mpCameraController->SetLookSpeed(0.004f);
     mpCameraController->SetMoveSpeed(200.0f);
+}
 
-    // 
-    // Create camera
-    // 
-
+void COutdoorLightScatteringSample::CreateLightCamera()
+{
     m_pDirectionalLightCamera = new CParallelLightCamera();
     
     m_pDirLightOrienationCamera = new CParallelLightCamera();
@@ -1177,26 +1151,13 @@ void COutdoorLightScatteringSample::Create()
     m_pLightController = new CPUTCameraControllerArcBall();
     m_pLightController->SetCamera( m_pDirLightOrienationCamera );
     m_pLightController->SetLookSpeed(0.002f);
+}
 
-    // Call ResizeWindow() because it creates some resources that our blur material needs (e.g., the back buffer)
-    ResizeWindow(width, height);
-
-    
-
-    /*
-    * Create DX resources
-    */ 
-
-    // Initialize the post process object to the device and context
-    hResult = m_pLightSctrPP->OnCreateDevice(mpD3dDevice, mpContext);
-    if( FAILED( hResult ) )
-        return;
-
-
-    // Create data source
+bool COutdoorLightScatteringSample::CreateElevationDatSource()
+{
     try
     {
-		m_pElevDataSource.reset( new CElevationDataSource(m_strRawDEMDataFile.c_str()) );
+        m_pElevDataSource.reset( new CElevationDataSource(m_strRawDEMDataFile.c_str()) );
         m_pElevDataSource->SetOffsets(m_TerrainRenderParams.m_iColOffset, m_TerrainRenderParams.m_iRowOffset);
         m_fMinElevation = m_pElevDataSource->GetGlobalMinElevation() * m_TerrainRenderParams.m_TerrainAttribs.m_fElevationScale;
         m_fMaxElevation = m_pElevDataSource->GetGlobalMaxElevation() * m_TerrainRenderParams.m_TerrainAttribs.m_fElevationScale;
@@ -1204,20 +1165,27 @@ void COutdoorLightScatteringSample::Create()
     catch(const std::exception &)
     {
         LOG_ERROR(_T("Failed to create elevation data source"));
-        return;
+        return false;
     }
 
+    return true;
+}
 
-	LPCTSTR strTileTexPaths[CEarthHemsiphere::NUM_TILE_TEXTURES], strNormalMapPaths[CEarthHemsiphere::NUM_TILE_TEXTURES];
+void COutdoorLightScatteringSample::CreateEarthHemisphere()
+{
+    LPCTSTR strTileTexPaths[CEarthHemsiphere::NUM_TILE_TEXTURES], strNormalMapPaths[CEarthHemsiphere::NUM_TILE_TEXTURES];
 	for(int iTile=0; iTile < _countof(strTileTexPaths); ++iTile )
     {
 		strTileTexPaths[iTile] = m_strTileTexPaths[iTile].c_str();
         strNormalMapPaths[iTile] = m_strNormalMapTexPaths[iTile].c_str();
     }
-    
+
+    HRESULT hr;
     V( m_EarthHemisphere.OnD3D11CreateDevice(m_pElevDataSource.get(), m_TerrainRenderParams, mpD3dDevice, mpContext, m_strRawDEMDataFile.c_str(), m_strMtrlMaskFile.c_str(), strTileTexPaths, strNormalMapPaths ) );
+}
 
-
+void COutdoorLightScatteringSample::CreateLightAttribsConstantBuffer()
+{
     D3D11_BUFFER_DESC CBDesc = 
     {
         sizeof(SLightAttribs),
@@ -1227,7 +1195,58 @@ void COutdoorLightScatteringSample::Create()
         0, //UINT MiscFlags;
         0, //UINT StructureByteStride;
     };
+
+    HRESULT hr;
     V( mpD3dDevice->CreateBuffer( &CBDesc, NULL, &m_pcbLightAttribs) );
+}
+
+// Handle OnCreation events
+//-----------------------------------------------------------------------------
+void COutdoorLightScatteringSample::Create()
+{    
+    HRESULT hr;
+	LPCWSTR ConfigPath = L"Default_Config.txt";
+    if( FAILED(ParseConfigurationFile( ConfigPath )) )
+    {
+        LOG_ERROR(_T("Failed to load config file %s"), ConfigPath );
+        return;
+    }
+
+    InitializeGUI();
+
+    CreateTmpBackBuffAndDepthBuff(mpD3dDevice);
+
+    // Create shadow map before other assets!!!
+    if(FAILED(CreateShadowMap(mpD3dDevice)))
+        return;
+
+    CPUTAssetLibrary::GetAssetLibrary()->SetMediaDirectoryName(  _L("Media\\"));
+
+    // Add our programatic (and global) material parameters
+    CPUTMaterial::mGlobalProperties.AddValue( _L("cbPerFrameValues"), _L("$cbPerFrameValues") );
+    CPUTMaterial::mGlobalProperties.AddValue( _L("cbPerModelValues"), _L("#cbPerModelValues") );
+
+    CreateDefaultRenderStatesBlock();
+
+    int width, height;
+    CPUTOSServices::GetOSServices()->GetClientDimensions(&width, &height);
+
+    CreateViewCamera(width, height);
+
+    CreateLightCamera();
+
+    // Call ResizeWindow() because it creates some resources that our blur material needs (e.g., the back buffer)
+    ResizeWindow(width, height);
+
+    if(FAILED(m_pLightSctrPP->OnCreateDevice(mpD3dDevice, mpContext)))
+        return;
+    
+    if(CreateElevationDatSource() == false)
+       return;
+
+    CreateEarthHemisphere();
+
+    CreateLightAttribsConstantBuffer();
 }
 
 
@@ -1237,7 +1256,7 @@ void GetRaySphereIntersection(D3DXVECTOR3 f3RayOrigin,
                               float fSphereRadius,
                               D3DXVECTOR2 &f2Intersections)
 {
-    // http://wiki.cgsociety.org/index.php/Ray_Sphere_Intersection
+    // https://web.archive.org/web/20130523060257/http://wiki.cgsociety.org/index.php/Ray_Sphere_Intersection
     f3RayOrigin -= f3SphereCenter;
     float A = D3DXVec3Dot(&f3RayDirection, &f3RayDirection);
     float B = 2 * D3DXVec3Dot(&f3RayOrigin, &f3RayDirection);
@@ -1256,9 +1275,7 @@ void GetRaySphereIntersection(D3DXVECTOR3 f3RayOrigin,
     }
 }
 
-extern float3 gLightDir;
-void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContext,
-                                             SLightAttribs &LightAttribs)
+void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContext, SLightAttribs &LightAttribs)
 {
     //CPUTRenderParametersDX drawParams(pContext);
     SShadowMapAttribs& ShadowMapAttribs = LightAttribs.ShadowAttribs;
@@ -1308,9 +1325,22 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
     D3DXVECTOR3 f3CameraPosInLightSpace;
     D3DXVec3TransformCoord(&f3CameraPosInLightSpace, &m_CameraPos, &WorldToLightViewSpaceMatr);
 
-    D3DXMATRIX mProj = (D3DXMATRIX &)*mpCamera->GetProjectionMatrix();
-    float fMainCamNearPlane = -mProj._43 / mProj._33;
-    float fMainCamFarPlane = mProj._33 / (mProj._33-1) * fMainCamNearPlane;
+    /*
+    from https://docs.microsoft.com/en-us/windows/win32/direct3d9/projection-transform
+
+    proj43 = -proj33*Zn
+    -proj43/proj33 = Zn
+
+    proj33 = Zf/(Zf - Zn)
+    proj33*(Zf - Zn) = Zf
+    proj33*Zf - proj33*Zn = Zf
+    -proj33*Zn = Zf - proj33*Zf
+    proj33*Zn = proj33*Zf - Zf
+    proj33*Zn = Zf*(proj33 - 1)
+    (proj33*Zn)/(proj33 - 1) = Zf
+    */
+    float fMainCamNearPlane = -m_CameraProjMatrix._43 / m_CameraProjMatrix._33;
+    float fMainCamFarPlane = m_CameraProjMatrix._33 / (m_CameraProjMatrix._33 - 1.0f) * fMainCamNearPlane;
     //fMainCamNearPlane = min(fMainCamNearPlane, 2e+5f);
 
     for(int i=0; i < MAX_CASCADES; ++i)
@@ -1346,7 +1376,7 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
         float fMaxLightShaftsDist = 3e+5f;
         CurrCascade.f4StartEndZ.x = (iCascade == m_PPAttribs.m_iFirstCascade) ? 0 : min(fCascadeFarZ, fMaxLightShaftsDist);
         CurrCascade.f4StartEndZ.y = min(fCascadeNearZ, fMaxLightShaftsDist);
-        CascadeFrustumProjMatrix = mProj;
+        CascadeFrustumProjMatrix = m_CameraProjMatrix;
         CascadeFrustumProjMatrix._33 = fCascadeFarZ / (fCascadeFarZ - fCascadeNearZ);
         CascadeFrustumProjMatrix._43 = -fCascadeNearZ * CascadeFrustumProjMatrix._33;
 
@@ -1567,13 +1597,13 @@ void COutdoorLightScatteringSample::Update(double deltaSeconds)
     }
     
     m_CameraViewMatrix = (D3DXMATRIX&)*mpCamera->GetViewMatrix();
-    D3DXMATRIX mProj = (D3DXMATRIX &)*mpCamera->GetProjectionMatrix();
+    m_CameraProjMatrix = (D3DXMATRIX&)*mpCamera->GetProjectionMatrix();
     float fEarthRadius = SAirScatteringAttribs().fEarthRadius;
     D3DXVECTOR3 EarthCenter(0, -fEarthRadius, 0);
     float fNearPlaneZ, fFarPlaneZ;
     ComputeApproximateNearFarPlaneDist(m_CameraPos,
                                        m_CameraViewMatrix,
-                                       mProj,
+                                       m_CameraProjMatrix,
                                        EarthCenter,
                                        fEarthRadius,
                                        fEarthRadius + m_fMinElevation,
@@ -1599,33 +1629,25 @@ static D3DXVECTOR2 ProjToUV(const D3DXVECTOR2& f2ProjSpaceXY)
 void COutdoorLightScatteringSample::Render(double deltaSeconds)
 {
     const float srgbClearColor[] = { 0.0993f, 0.0993f, 0.0993f, 1.0f }; //sRGB - red,green,blue,alpha pow(0.350, 2.2)
-    const float  rgbClearColor[] = {  0.350f,  0.350f,  0.350f, 1.0f }; //RGB - red,green,blue,alpha
 
     // Clear back buffer
-    const float clearColor[] = { 0.0993f, 0.0993f, 0.0993f, 1.0f };
-    mpContext->ClearRenderTargetView( mpBackBufferRTV,  clearColor );
+    mpContext->ClearRenderTargetView( mpBackBufferRTV,  srgbClearColor );
     mpContext->ClearDepthStencilView( mpDepthStencilView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 0.0f, 0);
 
     CPUTRenderParametersDX drawParams(mpContext);
 
-    D3DXMATRIX mProj = (D3DXMATRIX &)*mpCamera->GetProjectionMatrix();
-    D3DXMATRIX mView = m_CameraViewMatrix;//(D3DXMATRIX &)*mpCamera->GetViewMatrix();
-    D3DXMATRIX mViewProj = mView * mProj;
+    D3DXMATRIX mViewProj = m_CameraViewMatrix * m_CameraProjMatrix;
 
     // Get the camera position
     D3DXMATRIX CameraWorld;
-    D3DXMatrixInverse(&CameraWorld, NULL, &mView);
+    D3DXMatrixInverse(&CameraWorld, NULL, &m_CameraViewMatrix);
     D3DXVECTOR3 CameraPos = *(D3DXVECTOR3*)&CameraWorld._41;
 
-    D3DXVECTOR3 v3LightDir = -(D3DXVECTOR3&)m_pDirLightOrienationCamera->GetLook();
-    D3DXVECTOR3 v3DirOnLight = -v3LightDir;
+    D3DXVECTOR3 v3DirOnLight = (D3DXVECTOR3&)m_pDirLightOrienationCamera->GetLook();
 
     SLightAttribs LightAttribs;
     LightAttribs.f4DirOnLight = D3DXVECTOR4( v3DirOnLight.x, v3DirOnLight.y, v3DirOnLight.z, 0 );
-
-    D3DXVECTOR4 f4ExtraterrestrialSunColor = D3DXVECTOR4(10,10,10,10);
-    LightAttribs.f4ExtraterrestrialSunColor = f4ExtraterrestrialSunColor*m_fScatteringScale;
-    mLightColor = (float3&)f4ExtraterrestrialSunColor;
+    LightAttribs.f4ExtraterrestrialSunColor = D3DXVECTOR4(10.0f, 10.0f, 10.0f, 10.0f) * m_fScatteringScale;
 
     CPUTGuiControllerDX11* pGUI = CPUTGetGuiController();
     UINT uiSelectedItem;
@@ -1697,8 +1719,8 @@ void COutdoorLightScatteringSample::Render(double deltaSeconds)
         FrameAttribs.CameraAttribs.f4CameraPos = D3DXVECTOR4(CameraPos.x, CameraPos.y, CameraPos.z, 0);            ///< Camera world position
         FrameAttribs.CameraAttribs.fNearPlaneZ = mpCamera->GetNearPlaneDistance();
         FrameAttribs.CameraAttribs.fFarPlaneZ  = mpCamera->GetFarPlaneDistance() * 0.999999f;
-        D3DXMatrixTranspose( &FrameAttribs.CameraAttribs.mViewT, &mView);
-        D3DXMatrixTranspose( &FrameAttribs.CameraAttribs.mProjT, &mProj);
+        D3DXMatrixTranspose( &FrameAttribs.CameraAttribs.mViewT, &m_CameraViewMatrix);
+        D3DXMatrixTranspose( &FrameAttribs.CameraAttribs.mProjT, &m_CameraProjMatrix);
         D3DXMatrixTranspose( &FrameAttribs.CameraAttribs.mViewProjInvT, &mViewProjInverseMatr);
 
         FrameAttribs.pcbLightAttribs = m_pcbLightAttribs;

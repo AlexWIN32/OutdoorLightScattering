@@ -126,6 +126,14 @@ public:
     virtual void Update(double deltaSeconds);
     virtual void ResizeWindow(UINT width, UINT height);
     
+    void InitializeGUI();
+    void CreateDefaultRenderStatesBlock();
+    void CreateViewCamera(int screenWidth, int screenHeight);
+    void CreateLightCamera();
+    bool CreateElevationDatSource();
+    void CreateEarthHemisphere();
+    void CreateLightAttribsConstantBuffer();
+
     void Shutdown();
 
     HRESULT ParseConfigurationFile( LPCWSTR ConfigFilePath );
@@ -190,6 +198,7 @@ private:
     CEarthHemsiphere m_EarthHemisphere;
 
     D3DXMATRIX  m_CameraViewMatrix;
+    D3DXMATRIX  m_CameraProjMatrix;
 	D3DXVECTOR3 m_CameraPos;
 
     CComPtr<ID3D11Buffer> m_pcbLightAttribs;
