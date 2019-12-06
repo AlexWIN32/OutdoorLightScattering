@@ -1275,19 +1275,13 @@ void GetRaySphereIntersection(D3DXVECTOR3 f3RayOrigin,
     }
 }
 
-void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContext, SShadowMapAttribs &ShadowMapAttribs, D3DXVECTOR3 v3DirOnLight)
+static D3DXMATRIX CreateLightBasis(const D3DXVECTOR3 &LightDir)
 {
-    D3DXVECTOR3 v3LightDirection = -v3DirOnLight;
-
-    gLightDir.x = v3LightDirection.x;
-    gLightDir.y = v3LightDirection.y;
-    gLightDir.z = v3LightDirection.z;
-
     // Declare working vectors
     D3DXVECTOR3 vLightSpaceX, vLightSpaceY, vLightSpaceZ;
 
     // Compute an inverse vector for the direction on the sun
-    vLightSpaceZ = v3LightDirection;
+    vLightSpaceZ = LightDir;
     // And a vector for X light space
     vLightSpaceX = D3DXVECTOR3( 1.0f, 0.0, 0.0 );
     // Compute the cross products
@@ -1315,11 +1309,11 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
     WorldToLightViewSpaceMatr._23 = vLightSpaceZ.y;
     WorldToLightViewSpaceMatr._33 = vLightSpaceZ.z;
 
-    D3DXMatrixTranspose(&ShadowMapAttribs.mWorldToLightViewT, &WorldToLightViewSpaceMatr);
+    return WorldToLightViewSpaceMatr;
+}
 
-    D3DXVECTOR3 f3CameraPosInLightSpace;
-    D3DXVec3TransformCoord(&f3CameraPosInLightSpace, &m_CameraPos, &WorldToLightViewSpaceMatr);
-
+static D3DXVECTOR2 GetViewCameraNearAndFarPlanes(D3DXMATRIX &ProjMatrix, )
+{
     /*
     from https://docs.microsoft.com/en-us/windows/win32/direct3d9/projection-transform
 
@@ -1334,9 +1328,49 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
     proj33*Zn = Zf*(proj33 - 1)
     (proj33*Zn)/(proj33 - 1) = Zf
     */
-    float fMainCamNearPlane = -m_CameraProjMatrix._43 / m_CameraProjMatrix._33;
-    float fMainCamFarPlane = m_CameraProjMatrix._33 / (m_CameraProjMatrix._33 - 1.0f) * fMainCamNearPlane;
-    //fMainCamNearPlane = min(fMainCamNearPlane, 2e+5f);
+    D3DXVECTOR2 nearFarPlane;
+    nearFarPlane.x = -ProjMatrix._43 / ProjMatrix._33;
+    nearFarPlane.y = ProjMatrix._33 / (ProjMatrix._33 - 1.0f) * nearFarPlane.x;
+
+    return nearFarPlane;
+}
+
+D3DXVECTOR2 COutdoorLightScatteringSample::GetCascadeZRange(const SShadowMapAttribs &ShadowMapAttribs, int Cascade, const D3DXVECTOR2 &ViewCamNearFarPlane)
+{
+    float fCascadeNearZ = ViewCamNearFarPlane.x;
+    float fCascadeFarZ = (Cascade == 0) ? ViewCamNearFarPlane.y : ShadowMapAttribs.fCascadeCamSpaceZEnd[Cascade-1];
+
+    if (Cascade < m_TerrainRenderParams.m_iNumShadowCascades-1) 
+    {
+        float ratio = ViewCamNearFarPlane.x / ViewCamNearFarPlane.y;
+        float power = (float)(Cascade+1) / (float)m_TerrainRenderParams.m_iNumShadowCascades;
+        float logZ = ViewCamNearFarPlane.y * pow(ratio, power);
+        
+        float range = ViewCamNearFarPlane.x - ViewCamNearFarPlane.y;
+        float uniformZ = ViewCamNearFarPlane.y + range * power;
+
+        fCascadeNearZ = m_fCascadePartitioningFactor * (logZ - uniformZ) + uniformZ;
+    }
+
+    return D3DXVECTOR2(fCascadeNearZ, fCascadeFarZ);
+}
+
+void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContext, SShadowMapAttribs &ShadowMapAttribs, D3DXVECTOR3 v3DirOnLight)
+{
+    D3DXVECTOR3 v3LightDirection = -v3DirOnLight;
+
+    gLightDir.x = v3LightDirection.x;
+    gLightDir.y = v3LightDirection.y;
+    gLightDir.z = v3LightDirection.z;
+
+    D3DXMATRIX WorldToLightViewSpaceMatr = CreateLightBasis(v3LightDirection);
+
+    D3DXMatrixTranspose(&ShadowMapAttribs.mWorldToLightViewT, &WorldToLightViewSpaceMatr);
+
+    D3DXVECTOR3 f3CameraPosInLightSpace;
+    D3DXVec3TransformCoord(&f3CameraPosInLightSpace, &m_CameraPos, &WorldToLightViewSpaceMatr);
+
+    D3DXVECTOR2 mainCamNearFarPlanes = GetViewCameraNearAndFarPlanes(m_CameraProjMatrix);
 
     for(int i=0; i < MAX_CASCADES; ++i)
         ShadowMapAttribs.fCascadeCamSpaceZEnd[i] = +FLT_MAX;
@@ -1351,27 +1385,20 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
     // Render cascades
     for(int iCascade = 0; iCascade < m_TerrainRenderParams.m_iNumShadowCascades; ++iCascade)
     {
-        auto &CurrCascade = ShadowMapAttribs.Cascades[iCascade];
-        D3DXMATRIX CascadeFrustumProjMatrix;
-        float &fCascadeNearZ = ShadowMapAttribs.fCascadeCamSpaceZEnd[iCascade];
-        float fCascadeFarZ = (iCascade == 0) ? fMainCamFarPlane : ShadowMapAttribs.fCascadeCamSpaceZEnd[iCascade-1];
-        fCascadeNearZ = fMainCamNearPlane;
+        D3DXVECTOR2 cascadeZNearFar = GetCascadeZRange(ShadowMapAttribs, iCascade, mainCamNearFarPlanes);
 
-        if (iCascade < m_TerrainRenderParams.m_iNumShadowCascades-1) 
-        {
-            float ratio = fMainCamNearPlane / fMainCamFarPlane;
-            float power = (float)(iCascade+1) / (float)m_TerrainRenderParams.m_iNumShadowCascades;
-            float logZ = fMainCamFarPlane * pow(ratio, power);
-        
-            float range = fMainCamNearPlane - fMainCamFarPlane;
-            float uniformZ = fMainCamFarPlane + range * power;
+        float fCascadeNearZ = cascadeZNearFar.x;
+        float fCascadeFarZ = cascadeZNearFar.y;
 
-            fCascadeNearZ = m_fCascadePartitioningFactor * (logZ - uniformZ) + uniformZ;
-        }
+        ShadowMapAttribs.fCascadeCamSpaceZEnd[iCascade] = fCascadeNearZ;
+
         float fMaxLightShaftsDist = 3e+5f;
+
+        auto &CurrCascade = ShadowMapAttribs.Cascades[iCascade];
         CurrCascade.f4StartEndZ.x = (iCascade == m_PPAttribs.m_iFirstCascade) ? 0 : min(fCascadeFarZ, fMaxLightShaftsDist);
         CurrCascade.f4StartEndZ.y = min(fCascadeNearZ, fMaxLightShaftsDist);
-        CascadeFrustumProjMatrix = m_CameraProjMatrix;
+
+        D3DXMATRIX CascadeFrustumProjMatrix = m_CameraProjMatrix;
         CascadeFrustumProjMatrix._33 = fCascadeFarZ / (fCascadeFarZ - fCascadeNearZ);
         CascadeFrustumProjMatrix._43 = -fCascadeNearZ * CascadeFrustumProjMatrix._33;
 

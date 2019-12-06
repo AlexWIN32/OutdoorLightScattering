@@ -133,6 +133,7 @@ public:
     bool CreateElevationDatSource();
     void CreateEarthHemisphere();
     void CreateLightAttribsConstantBuffer();
+    D3DXVECTOR2 GetCascadeZRange(const SShadowMapAttribs &ShadowMapAttribs, int Cascade, const D3DXVECTOR2 &ViewCamNearFarPlane);
 
     void Shutdown();
 
