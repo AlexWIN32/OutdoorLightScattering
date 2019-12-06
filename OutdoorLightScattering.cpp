@@ -1275,13 +1275,8 @@ void GetRaySphereIntersection(D3DXVECTOR3 f3RayOrigin,
     }
 }
 
-void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContext, SLightAttribs &LightAttribs)
+void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContext, SShadowMapAttribs &ShadowMapAttribs, D3DXVECTOR3 v3DirOnLight)
 {
-    //CPUTRenderParametersDX drawParams(pContext);
-    SShadowMapAttribs& ShadowMapAttribs = LightAttribs.ShadowAttribs;
-
-    //CPUTCamera *pLastCamera = mpCamera;
-    D3DXVECTOR3 v3DirOnLight = (D3DXVECTOR3&)LightAttribs.f4DirOnLight;
     D3DXVECTOR3 v3LightDirection = -v3DirOnLight;
 
     gLightDir.x = v3LightDirection.x;
@@ -1636,8 +1631,6 @@ void COutdoorLightScatteringSample::Render(double deltaSeconds)
 
     CPUTRenderParametersDX drawParams(mpContext);
 
-    D3DXMATRIX mViewProj = m_CameraViewMatrix * m_CameraProjMatrix;
-
     // Get the camera position
     D3DXMATRIX CameraWorld;
     D3DXMatrixInverse(&CameraWorld, NULL, &m_CameraViewMatrix);
@@ -1645,19 +1638,22 @@ void COutdoorLightScatteringSample::Render(double deltaSeconds)
 
     D3DXVECTOR3 v3DirOnLight = (D3DXVECTOR3&)m_pDirLightOrienationCamera->GetLook();
 
-    SLightAttribs LightAttribs;
-    LightAttribs.f4DirOnLight = D3DXVECTOR4( v3DirOnLight.x, v3DirOnLight.y, v3DirOnLight.z, 0 );
-    LightAttribs.f4ExtraterrestrialSunColor = D3DXVECTOR4(10.0f, 10.0f, 10.0f, 10.0f) * m_fScatteringScale;
-
     CPUTGuiControllerDX11* pGUI = CPUTGetGuiController();
     UINT uiSelectedItem;
     ((CPUTDropdown*)pGUI->GetControl(ID_FIRST_CASCADE_TO_RAY_MARCH_DROPDOWN))->GetSelectedItem(uiSelectedItem);
     m_PPAttribs.m_iFirstCascade = min((int)uiSelectedItem, m_TerrainRenderParams.m_iNumShadowCascades - 1);
     m_PPAttribs.m_fFirstCascade = (float)m_PPAttribs.m_iFirstCascade;
 
-	RenderShadowMap(mpContext, LightAttribs);
+    SShadowMapAttribs shadowMapAttribs;
+	RenderShadowMap(mpContext, shadowMapAttribs, v3DirOnLight);
     
+    SLightAttribs LightAttribs;
+    LightAttribs.ShadowAttribs = shadowMapAttribs;
+    LightAttribs.f4DirOnLight = D3DXVECTOR4( v3DirOnLight.x, v3DirOnLight.y, v3DirOnLight.z, 0 );
+    LightAttribs.f4ExtraterrestrialSunColor = D3DXVECTOR4(10.0f, 10.0f, 10.0f, 10.0f) * m_fScatteringScale;
     LightAttribs.ShadowAttribs.bVisualizeCascades = ((CPUTCheckbox*)pGUI->GetControl(ID_SHOW_CASCADES_CHECK))->GetCheckboxState() == CPUT_CHECKBOX_CHECKED;
+
+    D3DXMATRIX mViewProj = m_CameraViewMatrix * m_CameraProjMatrix;
 
     // Calculate location of the sun on the screen
     D3DXVECTOR4 &f4LightPosPS = LightAttribs.f4LightScreenPos;

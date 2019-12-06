@@ -146,8 +146,7 @@ private:
     HRESULT CreateTmpBackBuffAndDepthBuff(ID3D11Device* pd3dDevice);
     void ReleaseTmpBackBuffAndDepthBuff();
     
-    void RenderShadowMap(ID3D11DeviceContext *pContext, 
-                         SLightAttribs &LightAttribs);
+    void RenderShadowMap(ID3D11DeviceContext *pContext, SShadowMapAttribs &ShadowMapAttribs, D3DXVECTOR3 v3DirOnLight);
 
     void Destroy();
 
