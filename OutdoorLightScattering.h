@@ -134,6 +134,8 @@ public:
     void CreateEarthHemisphere();
     void CreateLightAttribsConstantBuffer();
     D3DXVECTOR2 GetCascadeZRange(const SShadowMapAttribs &ShadowMapAttribs, int Cascade, const D3DXVECTOR2 &ViewCamNearFarPlane);
+    D3DXMATRIX CalculateCascadeProjToLight(const D3DXVECTOR2 &CascadeZNearFar, const D3DXMATRIX &WorldToLightSpace);
+    void CalculateCascadeRange(int Cascade, const D3DXMATRIX &CascadeFrustumProjSpaceToLightSpace, D3DXVECTOR3 &MinXYZ, D3DXVECTOR3 &MaxXYZ);
 
     void Shutdown();
 

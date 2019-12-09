@@ -1312,7 +1312,7 @@ static D3DXMATRIX CreateLightBasis(const D3DXVECTOR3 &LightDir)
     return WorldToLightViewSpaceMatr;
 }
 
-static D3DXVECTOR2 GetViewCameraNearAndFarPlanes(D3DXMATRIX &ProjMatrix, )
+static D3DXVECTOR2 GetViewCameraNearAndFarPlanes(D3DXMATRIX &ProjMatrix)
 {
     /*
     from https://docs.microsoft.com/en-us/windows/win32/direct3d9/projection-transform
@@ -1335,6 +1335,103 @@ static D3DXVECTOR2 GetViewCameraNearAndFarPlanes(D3DXMATRIX &ProjMatrix, )
     return nearFarPlane;
 }
 
+static void ConfigureCascadeRange(float ShadowMapDim, D3DXVECTOR3 &MinXYZ, D3DXVECTOR3 &MaxXYZ)
+{
+    //add one extra pixel of shadow map dimension in ortho projection space
+    float fCascadeXExt = (MaxXYZ.x - MinXYZ.x) * (1.0f + 1.0f/ShadowMapDim);
+    float fCascadeYExt = (MaxXYZ.y - MinXYZ.y) * (1.0f + 1.0f/ShadowMapDim);
+
+    //round to nearest power of two
+    fCascadeXExt = pow(2.0f, ceil( log(fCascadeXExt)/log(2.0f) ) );
+    fCascadeYExt = pow(2.0f, ceil( log(fCascadeYExt)/log(2.0f) ) );
+
+    // Align cascade center with the shadow map texels to alleviate temporal aliasing
+    float fCascadeXCenter = (MaxXYZ.x + MinXYZ.x)/2.f;
+    float fCascadeYCenter = (MaxXYZ.y + MinXYZ.y)/2.f;
+    float fTexelXSize = fCascadeXExt / ShadowMapDim;
+    float fTexelYSize = fCascadeXExt / ShadowMapDim;
+    fCascadeXCenter = floor(fCascadeXCenter/fTexelXSize) * fTexelXSize;
+    fCascadeYCenter = floor(fCascadeYCenter/fTexelYSize) * fTexelYSize;
+
+    // Compute new cascade min/max xy coords
+    MaxXYZ.x = fCascadeXCenter + fCascadeXExt/2.0f;
+    MaxXYZ.y = fCascadeYCenter + fCascadeYExt/2.0f;
+    MinXYZ.x = fCascadeXCenter - fCascadeXExt/2.0f;
+    MinXYZ.y = fCascadeYCenter - fCascadeYExt/2.0f;
+}
+
+D3DXMATRIX GetCascadeProj(const D3DXVECTOR3 &MinXYZ, const D3DXVECTOR3 &MaxXYZ)
+{
+    /*
+    We use orthographic projection
+    https://docs.microsoft.com/en-us/windows/win32/direct3d10/d3d10-d3dxmatrixorthooffcenterlh
+    with inverted z values as listed below
+
+    d(z) = z / (zf - zn) + zn / (zn - zf)
+            = z / (zf - zn) + zn / -(zf - zn)
+            = (z - zn) / (zf - zn)
+
+    invD(z) = 1 - d(z)
+            = 1 - (z - zn) / (zf - zn)
+            = ((zf - zn) - (z - zn)) / (zf - zn)
+            = (zf - zn - z + zn)) / (zf - zn)
+            = (zf - z) / (zf - zn)
+            = -z / (zf - zn) + zf / (zf - zn)
+
+    x evaluation
+    2 / (mxX - mnX) - mnX*2 / (mxX - mnX) - 1
+    (2 - 2*mnX) / (mxX - mnX) - 1
+    (2 - 2*mnX - (mxX - mnX)) / (mxX - mnX)
+    (2 - 2*mnX - mxX + mnX) / (mxX - mnX)
+    (2 - mnX - mxX ) / (mxX - mnX)
+    (2 - (mnX + mxX)) / (mxX - mnX)
+    2 / (mxX - mnX) - (mnX + mxX) / (mxX - mnX)
+    2 / (mxX - mnX) + (mnX + mxX) / (mnX - mxX)
+
+    y evaluation
+    2 / (mxY - mnX) - mnY*2 / (mxY - mnY) - 1
+    (2 - 2*mnY) / (mxY - mnY) - 1
+    (2 - 2*mnY - (mxY - mnY)) / (mxY - mnY)
+    (2 - 2*mnY - mxY + mnY) / (mxY - mnY)
+    (2 - mnY - mxY) / (mxY - mnY)
+    (2 - (mnY + mxY)) / (mxY - mnY)
+    2 / (mxY - mnY) - (mnY + mxY) / (mxY - mnY)
+    2 / (mxY - mnY) + (mnY + mxY) / (mnY - mxY)
+    */
+
+    float scaleX =  2.f / (MaxXYZ.x - MinXYZ.x);
+    float scaleY =  2.f / (MaxXYZ.y - MinXYZ.y);
+    float scaleZ = -1.f / (MaxXYZ.z - MinXYZ.z);
+
+    // Apply bias to shift the extent to [-1,1]x[-1,1]x[1,0]
+    float transX = -MinXYZ.x * scaleX - 1.f;
+    float transY = -MinXYZ.y * scaleY - 1.f;
+    float transZ = -MaxXYZ.z * scaleZ + 0.f;
+
+    D3DXMATRIX ScaleMatrix;
+    D3DXMatrixScaling(&ScaleMatrix, scaleX, scaleY, scaleZ);
+
+    D3DXMATRIX ScaledBiasMatrix;
+    D3DXMatrixTranslation(&ScaledBiasMatrix, transX, transY, transZ);
+
+    // Note: bias is applied after scaling!
+    return ScaleMatrix * ScaledBiasMatrix;
+}
+
+D3DXMATRIX COutdoorLightScatteringSample::CalculateCascadeProjToLight(const D3DXVECTOR2 &CascadeZNearFar, const D3DXMATRIX &WorldToLightSpace)
+{
+    D3DXMATRIX CascadeFrustumProjMatrix = m_CameraProjMatrix;
+    CascadeFrustumProjMatrix._33 = CascadeZNearFar.y / (CascadeZNearFar.y - CascadeZNearFar.x);
+    CascadeFrustumProjMatrix._43 = -CascadeZNearFar.x * CascadeFrustumProjMatrix._33;
+
+    D3DXMATRIX CascadeFrustumViewProjMatr = m_CameraViewMatrix * CascadeFrustumProjMatrix;
+
+    D3DXMATRIX CascadeFrustumProjSpaceToWorldSpace;
+    D3DXMatrixInverse(&CascadeFrustumProjSpaceToWorldSpace, nullptr, &CascadeFrustumViewProjMatr);
+
+    return CascadeFrustumProjSpaceToWorldSpace * WorldToLightSpace;
+}
+
 D3DXVECTOR2 COutdoorLightScatteringSample::GetCascadeZRange(const SShadowMapAttribs &ShadowMapAttribs, int Cascade, const D3DXVECTOR2 &ViewCamNearFarPlane)
 {
     float fCascadeNearZ = ViewCamNearFarPlane.x;
@@ -1355,6 +1452,36 @@ D3DXVECTOR2 COutdoorLightScatteringSample::GetCascadeZRange(const SShadowMapAttr
     return D3DXVECTOR2(fCascadeNearZ, fCascadeFarZ);
 }
 
+void COutdoorLightScatteringSample::CalculateCascadeRange(int Cascade,
+                                                          const D3DXMATRIX &CascadeFrustumProjSpaceToLightSpace,
+                                                          D3DXVECTOR3 &MinXYZ,
+                                                          D3DXVECTOR3 &MaxXYZ)
+{
+    // First cascade used for ray marching must contain camera within it
+    if(Cascade != m_PPAttribs.m_iFirstCascade )
+    {
+        MinXYZ = D3DXVECTOR3(+FLT_MAX, +FLT_MAX, +FLT_MAX);
+        MaxXYZ = D3DXVECTOR3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+    }
+
+    for(int iClipPlaneCorner=0; iClipPlaneCorner < 8; ++iClipPlaneCorner)
+    {
+        D3DXVECTOR3 f3PlaneCornerProjSpace( (iClipPlaneCorner & 0x01) ? +1.f : - 1.f, 
+                                            (iClipPlaneCorner & 0x02) ? +1.f : - 1.f,
+                                            // Since we use complimentary depth buffering, 
+                                            // far plane has depth 0
+                                            (iClipPlaneCorner & 0x04) ? 1.f : 0.f);
+        D3DXVECTOR3 f3PlaneCornerLightSpace;
+        D3DXVec3TransformCoord(&f3PlaneCornerLightSpace, &f3PlaneCornerProjSpace, &CascadeFrustumProjSpaceToLightSpace);
+        D3DXVec3Minimize(&MinXYZ, &MinXYZ, &f3PlaneCornerLightSpace);
+        D3DXVec3Maximize(&MaxXYZ, &MaxXYZ, &f3PlaneCornerLightSpace);
+    }
+
+    // It is necessary to ensure that shadow-casting patches, which are not visible 
+    // in the frustum, are still rendered into the shadow map
+    MinXYZ.z -= SAirScatteringAttribs().fEarthRadius * sqrt(2.f);
+}
+
 void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContext, SShadowMapAttribs &ShadowMapAttribs, D3DXVECTOR3 v3DirOnLight)
 {
     D3DXVECTOR3 v3LightDirection = -v3DirOnLight;
@@ -1363,12 +1490,12 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
     gLightDir.y = v3LightDirection.y;
     gLightDir.z = v3LightDirection.z;
 
-    D3DXMATRIX WorldToLightViewSpaceMatr = CreateLightBasis(v3LightDirection);
+    D3DXMATRIX WorldToLightSpace = CreateLightBasis(v3LightDirection);
 
-    D3DXMatrixTranspose(&ShadowMapAttribs.mWorldToLightViewT, &WorldToLightViewSpaceMatr);
+    D3DXMatrixTranspose(&ShadowMapAttribs.mWorldToLightViewT, &WorldToLightSpace);
 
     D3DXVECTOR3 f3CameraPosInLightSpace;
-    D3DXVec3TransformCoord(&f3CameraPosInLightSpace, &m_CameraPos, &WorldToLightViewSpaceMatr);
+    D3DXVec3TransformCoord(&f3CameraPosInLightSpace, &m_CameraPos, &WorldToLightSpace);
 
     D3DXVECTOR2 mainCamNearFarPlanes = GetViewCameraNearAndFarPlanes(m_CameraProjMatrix);
 
@@ -1382,111 +1509,52 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
     UINT uiNumVP = 1;
     pContext->RSGetViewports(&uiNumVP, &OrigViewport);
 
+    D3D11_VIEWPORT NewViewPort;
+    NewViewPort.TopLeftX = 0;
+    NewViewPort.TopLeftY = 0;
+    NewViewPort.Width  = static_cast<float>( m_uiShadowMapResolution );
+    NewViewPort.Height = static_cast<float>( m_uiShadowMapResolution );
+    NewViewPort.MinDepth = 0;
+    NewViewPort.MaxDepth = 1;
+    // Set the viewport
+    pContext->RSSetViewports(1, &NewViewPort);
+
     // Render cascades
     for(int iCascade = 0; iCascade < m_TerrainRenderParams.m_iNumShadowCascades; ++iCascade)
     {
         D3DXVECTOR2 cascadeZNearFar = GetCascadeZRange(ShadowMapAttribs, iCascade, mainCamNearFarPlanes);
 
-        float fCascadeNearZ = cascadeZNearFar.x;
-        float fCascadeFarZ = cascadeZNearFar.y;
+        D3DXMATRIX CascadeFrustumProjSpaceToLightSpace = CalculateCascadeProjToLight(cascadeZNearFar, WorldToLightSpace);
 
-        ShadowMapAttribs.fCascadeCamSpaceZEnd[iCascade] = fCascadeNearZ;
+        ShadowMapAttribs.fCascadeCamSpaceZEnd[iCascade] = cascadeZNearFar.x;
+
+        D3DXVECTOR3 f3MinXYZ(f3CameraPosInLightSpace), f3MaxXYZ(f3CameraPosInLightSpace);
+        CalculateCascadeRange(iCascade, CascadeFrustumProjSpaceToLightSpace, f3MinXYZ, f3MaxXYZ);
+
+        ConfigureCascadeRange((float)m_uiShadowMapResolution, f3MinXYZ, f3MaxXYZ);
+
+        D3DXMATRIX cascadeProj = GetCascadeProj(f3MinXYZ, f3MaxXYZ);
 
         float fMaxLightShaftsDist = 3e+5f;
 
         auto &CurrCascade = ShadowMapAttribs.Cascades[iCascade];
-        CurrCascade.f4StartEndZ.x = (iCascade == m_PPAttribs.m_iFirstCascade) ? 0 : min(fCascadeFarZ, fMaxLightShaftsDist);
-        CurrCascade.f4StartEndZ.y = min(fCascadeNearZ, fMaxLightShaftsDist);
-
-        D3DXMATRIX CascadeFrustumProjMatrix = m_CameraProjMatrix;
-        CascadeFrustumProjMatrix._33 = fCascadeFarZ / (fCascadeFarZ - fCascadeNearZ);
-        CascadeFrustumProjMatrix._43 = -fCascadeNearZ * CascadeFrustumProjMatrix._33;
-
-        D3DXMATRIX CascadeFrustumViewProjMatr = m_CameraViewMatrix * CascadeFrustumProjMatrix;
-        D3DXMATRIX CascadeFrustumProjSpaceToWorldSpace;
-        D3DXMatrixInverse(&CascadeFrustumProjSpaceToWorldSpace, nullptr, &CascadeFrustumViewProjMatr);
-        D3DXMATRIX CascadeFrustumProjSpaceToLightSpace = CascadeFrustumProjSpaceToWorldSpace * WorldToLightViewSpaceMatr;
-
-        // Set reference minimums and maximums for each coordinate
-        D3DXVECTOR3 f3MinXYZ(f3CameraPosInLightSpace), f3MaxXYZ(f3CameraPosInLightSpace);
-        
-        // First cascade used for ray marching must contain camera within it
-        if( iCascade != m_PPAttribs.m_iFirstCascade )
-        {
-            f3MinXYZ = D3DXVECTOR3(+FLT_MAX, +FLT_MAX, +FLT_MAX);
-            f3MaxXYZ = D3DXVECTOR3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-        }
-
-        for(int iClipPlaneCorner=0; iClipPlaneCorner < 8; ++iClipPlaneCorner)
-        {
-            D3DXVECTOR3 f3PlaneCornerProjSpace( (iClipPlaneCorner & 0x01) ? +1.f : - 1.f, 
-                                                (iClipPlaneCorner & 0x02) ? +1.f : - 1.f,
-                                                // Since we use complimentary depth buffering, 
-                                                // far plane has depth 0
-                                                (iClipPlaneCorner & 0x04) ? 1.f : 0.f);
-            D3DXVECTOR3 f3PlaneCornerLightSpace;
-            D3DXVec3TransformCoord(&f3PlaneCornerLightSpace, &f3PlaneCornerProjSpace, &CascadeFrustumProjSpaceToLightSpace);
-            D3DXVec3Minimize(&f3MinXYZ, &f3MinXYZ, &f3PlaneCornerLightSpace);
-            D3DXVec3Maximize(&f3MaxXYZ, &f3MaxXYZ, &f3PlaneCornerLightSpace);
-        }
-
-        // It is necessary to ensure that shadow-casting patches, which are not visible 
-        // in the frustum, are still rendered into the shadow map
-        f3MinXYZ.z -= SAirScatteringAttribs().fEarthRadius * sqrt(2.f);
-        
-        // Align cascade extent to the closest power of two
-        float fShadowMapDim = (float)m_uiShadowMapResolution;
-        float fCascadeXExt = (f3MaxXYZ.x - f3MinXYZ.x) * (1 + 1.f/fShadowMapDim);
-        float fCascadeYExt = (f3MaxXYZ.y - f3MinXYZ.y) * (1 + 1.f/fShadowMapDim);
-        const float fExtStep = 2.f;
-        fCascadeXExt = pow( fExtStep, ceil( log(fCascadeXExt)/log(fExtStep) ) );
-        fCascadeYExt = pow( fExtStep, ceil( log(fCascadeYExt)/log(fExtStep) ) );
-        // Align cascade center with the shadow map texels to alleviate temporal aliasing
-        float fCascadeXCenter = (f3MaxXYZ.x + f3MinXYZ.x)/2.f;
-        float fCascadeYCenter = (f3MaxXYZ.y + f3MinXYZ.y)/2.f;
-        float fTexelXSize = fCascadeXExt / fShadowMapDim;
-        float fTexelYSize = fCascadeXExt / fShadowMapDim;
-        fCascadeXCenter = floor(fCascadeXCenter/fTexelXSize) * fTexelXSize;
-        fCascadeYCenter = floor(fCascadeYCenter/fTexelYSize) * fTexelYSize;
-        // Compute new cascade min/max xy coords
-        f3MaxXYZ.x = fCascadeXCenter + fCascadeXExt/2.f;
-        f3MinXYZ.x = fCascadeXCenter - fCascadeXExt/2.f;
-        f3MaxXYZ.y = fCascadeYCenter + fCascadeYExt/2.f;
-        f3MinXYZ.y = fCascadeYCenter - fCascadeYExt/2.f;
-
-        CurrCascade.f4LightSpaceScale.x =  2.f / (f3MaxXYZ.x - f3MinXYZ.x);
-        CurrCascade.f4LightSpaceScale.y =  2.f / (f3MaxXYZ.y - f3MinXYZ.y);
-        CurrCascade.f4LightSpaceScale.z = -1.f / (f3MaxXYZ.z - f3MinXYZ.z);
-        // Apply bias to shift the extent to [-1,1]x[-1,1]x[1,0]
-        CurrCascade.f4LightSpaceScaledBias.x = -f3MinXYZ.x * CurrCascade.f4LightSpaceScale.x - 1.f;
-        CurrCascade.f4LightSpaceScaledBias.y = -f3MinXYZ.y * CurrCascade.f4LightSpaceScale.y - 1.f;
-        CurrCascade.f4LightSpaceScaledBias.z = -f3MaxXYZ.z * CurrCascade.f4LightSpaceScale.z + 0.f;
-        D3DXMATRIX ScaleMatrix;
-        D3DXMatrixScaling(&ScaleMatrix, CurrCascade.f4LightSpaceScale.x, CurrCascade.f4LightSpaceScale.y, CurrCascade.f4LightSpaceScale.z);
-        D3DXMATRIX ScaledBiasMatrix;
-        D3DXMatrixTranslation(&ScaledBiasMatrix, CurrCascade.f4LightSpaceScaledBias.x, CurrCascade.f4LightSpaceScaledBias.y, CurrCascade.f4LightSpaceScaledBias.z);
-
-        // Note: bias is applied after scaling!
-        D3DXMATRIX CascadeProjMatr = ScaleMatrix * ScaledBiasMatrix;
-        //D3DXMatrixOrthoOffCenterLH( &m_LightOrthoMatrix, MinX, MaxX, MinY, MaxY, MaxZ, MinZ);
+        CurrCascade.f4StartEndZ.x = (iCascade == m_PPAttribs.m_iFirstCascade) ? 0 : min(cascadeZNearFar.y, fMaxLightShaftsDist);
+        CurrCascade.f4StartEndZ.y = min(cascadeZNearFar.x, fMaxLightShaftsDist);
+        CurrCascade.f4LightSpaceScale.x = cascadeProj(0, 0);
+        CurrCascade.f4LightSpaceScale.y = cascadeProj(1, 1);
+        CurrCascade.f4LightSpaceScale.z = cascadeProj(2, 2);
+        CurrCascade.f4LightSpaceScaledBias.x = cascadeProj(3, 0);
+        CurrCascade.f4LightSpaceScaledBias.y = cascadeProj(3, 1);
+        CurrCascade.f4LightSpaceScaledBias.z = cascadeProj(3, 2);
 
         // Adjust the world to light space transformation matrix
-        D3DXMATRIX WorldToLightProjSpaceMatr = WorldToLightViewSpaceMatr * CascadeProjMatr;
+        D3DXMATRIX WorldToLightProjSpaceMatr = WorldToLightSpace * cascadeProj;
         D3DXMATRIX ProjToUVScale, ProjToUVBias;
         D3DXMatrixScaling( &ProjToUVScale, 0.5f, -0.5f, 1.f);
         D3DXMatrixTranslation( &ProjToUVBias, 0.5f, 0.5f, 0.f);
         D3DXMATRIX WorldToShadowMapUVDepthMatr = WorldToLightProjSpaceMatr * ProjToUVScale * ProjToUVBias;
         D3DXMatrixTranspose( &ShadowMapAttribs.mWorldToShadowMapUVDepthT[iCascade], &WorldToShadowMapUVDepthMatr );
 
-        D3D11_VIEWPORT NewViewPort;
-        NewViewPort.TopLeftX = 0;
-        NewViewPort.TopLeftY = 0;
-        NewViewPort.Width  = static_cast<float>( m_uiShadowMapResolution );
-        NewViewPort.Height = static_cast<float>( m_uiShadowMapResolution );
-        NewViewPort.MinDepth = 0;
-        NewViewPort.MaxDepth = 1;
-        // Set the viewport
-        pContext->RSSetViewports(1, &NewViewPort);
         pContext->OMSetRenderTargets(0, nullptr, m_pShadowMapDSVs[iCascade]);
         pContext->ClearDepthStencilView(m_pShadowMapDSVs[iCascade], D3D11_CLEAR_DEPTH, 0.f, 0);
 
