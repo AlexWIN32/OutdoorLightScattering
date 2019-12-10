@@ -136,6 +136,7 @@ public:
     D3DXVECTOR2 GetCascadeZRange(const SShadowMapAttribs &ShadowMapAttribs, int Cascade, const D3DXVECTOR2 &ViewCamNearFarPlane);
     D3DXMATRIX CalculateCascadeProjToLight(const D3DXVECTOR2 &CascadeZNearFar, const D3DXMATRIX &WorldToLightSpace);
     void CalculateCascadeRange(int Cascade, const D3DXMATRIX &CascadeFrustumProjSpaceToLightSpace, D3DXVECTOR3 &MinXYZ, D3DXVECTOR3 &MaxXYZ);
+    void FillCascadeAttributes(SCascadeAttribs &CascadeAttribs, int CacadeInd,  const D3DXMATRIX &CascadeProj, const D3DXVECTOR2 &CascadeZNearFar);
 
     void Shutdown();
 
@@ -149,7 +150,7 @@ private:
     HRESULT CreateTmpBackBuffAndDepthBuff(ID3D11Device* pd3dDevice);
     void ReleaseTmpBackBuffAndDepthBuff();
     
-    void RenderShadowMap(ID3D11DeviceContext *pContext, SShadowMapAttribs &ShadowMapAttribs, D3DXVECTOR3 v3DirOnLight);
+    void RenderCascadedShadowMap(ID3D11DeviceContext *pContext, SShadowMapAttribs &ShadowMapAttribs, D3DXVECTOR3 v3DirOnLight);
 
     void Destroy();
 
