@@ -1568,6 +1568,64 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
     pContext->RSSetViewports(1, &OrigViewport);
 }
 
+static float GetMaxViewDisstance(float DisstToCamSqr, float EarthRadius, float MaxElevation)
+{
+    float earthRadiusSqr = EarthRadius * EarthRadius;
+    
+    //find the first value by using disstance to camera as hypotenuse
+    //and earth radius as cathetus and solving Pythagorean theorem
+    float val1 = sqrtf(DisstToCamSqr - earthRadiusSqr);
+    
+    //same as before but now we use max elevation as hypotenuse
+    float val2 = sqrtf(MaxElevation * MaxElevation - earthRadiusSqr);
+
+    return val1 + val2;
+}
+
+static float AdjustNearPlane(float CameraElevation, float MaxRadius,  const D3DXMATRIX &ProjMatrix)
+{
+    /*
+    as far as i understood, we correct near plane by taking fraction of length
+    of one of corners of near plane with z equals to 1
+
+    Perspective projection is 
+    | 1 / r * tan(a / 2)      0                0           0 |
+    |    0               1 / tan(a / 2)        0           0 |
+    |    0                    0            f / (f - n)     1 |
+    |    0                    0         -((f*n) / (f - n)) 0 |
+
+    and its inverse 
+    |r * tan(a / 2)      0     0        0        |
+    |    0          tan(a / 2) 0        0        |
+    |    0               0     0 -((f - n) / f*n)|
+    |    0               0     1       1 / n     |
+
+    so if we take point (1, 1, 0) in NDC space and multiply bi inverse with 
+    following homodeneous divede, we get
+
+    (r * tan(a / 2) * n, tan(a / 2) * n, 1)
+
+    becaus as i said erlier depth of near plane is equal to one, n is also
+    equal to one and it wil take us to
+
+    (r * tan(a / 2), tan(a / 2), 1)
+    
+    and the length of resulting vector in view plane  will be
+
+    sqrt((r * tan(a / 2)) ^ 2, (tan(a / 2)) ^ 2, 1)
+
+    which is equal to
+
+    sqrt((1 / P[0,0]) ^ 2, (1 / P[1,1]) ^ 2, 1)
+
+    where P is projection matrix
+    */
+
+    float NearPlaneCornerVLen = sqrt( 1 + 1.f/(ProjMatrix._11*ProjMatrix._11) + 1.f/ (ProjMatrix._22*ProjMatrix._22));
+
+    return (CameraElevation - MaxRadius) / NearPlaneCornerVLen;
+}
+
 void ComputeApproximateNearFarPlaneDist(const D3DXVECTOR3 &CameraPos,
                                         const D3DXMATRIX &ViewMatr,
                                         const D3DXMATRIX &ProjMatr, 
@@ -1585,16 +1643,12 @@ void ComputeApproximateNearFarPlaneDist(const D3DXVECTOR3 &CameraPos,
     // Compute maximum view distance for the current camera altitude
     D3DXVECTOR3 f3CameraGlobalPos = CameraPos - EarthCenter;
     float fCameraElevationSqr = D3DXVec3Dot(&f3CameraGlobalPos, &f3CameraGlobalPos);
-    float fMaxViewDistance = (float)(sqrt( (double)fCameraElevationSqr - (double)fEarthRadius*fEarthRadius ) + 
-                                     sqrt( (double)fMaxRadius*fMaxRadius - (double)fEarthRadius*fEarthRadius ));
+    float fMaxViewDistance = GetMaxViewDisstance(fCameraElevationSqr, fEarthRadius, fMaxRadius); 
     float fCameraElev = sqrt(fCameraElevationSqr);
 
     fNearPlaneZ = 50.f;
-    if( fCameraElev > fMaxRadius )
-    {
-        // Adjust near clipping plane
-        fNearPlaneZ = (fCameraElev - fMaxRadius) / sqrt( 1 + 1.f/(ProjMatr._11*ProjMatr._11) + 1.f/(ProjMatr._22*ProjMatr._22) );
-    }
+    if( fCameraElev > fMaxRadius )   
+        fNearPlaneZ = AdjustNearPlane(fCameraElev, fMaxRadius, ProjMatr);
 
     fNearPlaneZ = max(fNearPlaneZ, 50);
     fFarPlaneZ = 1000;

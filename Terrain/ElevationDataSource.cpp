@@ -36,7 +36,7 @@ CElevationDataSource::CElevationDataSource(LPCTSTR strSrcDemFile) :
 
     // Create components to read 16-bit png data
     CComPtr<IWICImagingFactory> pFactory;
-    hr = pFactory.CoCreateInstance(CLSID_WICImagingFactory);
+    hr = pFactory.CoCreateInstance(CLSID_WICImagingFactory1);
     if( FAILED(hr) )
         throw std::exception("Failed to create WICImagingFactory");
 
