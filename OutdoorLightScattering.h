@@ -137,6 +137,7 @@ public:
     D3DXMATRIX CalculateCascadeProjToLight(const D3DXVECTOR2 &CascadeZNearFar, const D3DXMATRIX &WorldToLightSpace);
     void CalculateCascadeRange(int Cascade, const D3DXMATRIX &CascadeFrustumProjSpaceToLightSpace, D3DXVECTOR3 &MinXYZ, D3DXVECTOR3 &MaxXYZ);
     void FillCascadeAttributes(SCascadeAttribs &CascadeAttribs, int CacadeInd,  const D3DXMATRIX &CascadeProj, const D3DXVECTOR2 &CascadeZNearFar);
+    SLightAttribs UpdateLightAttributes(const SShadowMapAttribs &ShadowAttribs);
 
     void Shutdown();
 
@@ -150,7 +151,7 @@ private:
     HRESULT CreateTmpBackBuffAndDepthBuff(ID3D11Device* pd3dDevice);
     void ReleaseTmpBackBuffAndDepthBuff();
     
-    void RenderShadowMap(ID3D11DeviceContext *pContext, SShadowMapAttribs &ShadowMapAttribs, D3DXVECTOR3 v3DirOnLight);
+    void RenderShadowMap(SShadowMapAttribs &ShadowMapAttribs);
 
     void Destroy();
 

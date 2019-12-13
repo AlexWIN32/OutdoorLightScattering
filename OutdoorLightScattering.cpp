@@ -1505,9 +1505,11 @@ void COutdoorLightScatteringSample::FillCascadeAttributes(SCascadeAttribs &Casca
     CascadeAttribs.f4LightSpaceScaledBias.z = CascadeProj(3, 2);
 }
 
-void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContext, SShadowMapAttribs &ShadowMapAttribs, D3DXVECTOR3 v3DirOnLight)
+void COutdoorLightScatteringSample::RenderShadowMap(SShadowMapAttribs &ShadowMapAttribs)
 {
     D3DXMATRIX projToUV = GetProjToUV();
+
+    D3DXVECTOR3 v3DirOnLight = (D3DXVECTOR3&)m_pDirLightOrienationCamera->GetLook();
 
     D3DXVECTOR3 v3LightDirection = -v3DirOnLight;
 
@@ -1530,12 +1532,12 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
     CComPtr<ID3D11RenderTargetView> pOrigRTV;
     CComPtr<ID3D11DepthStencilView> pOrigDSV;
     D3D11_VIEWPORT OrigViewport;
-    pContext->OMGetRenderTargets(1, &pOrigRTV, &pOrigDSV);
+    mpContext->OMGetRenderTargets(1, &pOrigRTV, &pOrigDSV);
     UINT uiNumVP = 1;
-    pContext->RSGetViewports(&uiNumVP, &OrigViewport);
+    mpContext->RSGetViewports(&uiNumVP, &OrigViewport);
 
     D3D11_VIEWPORT NewViewPort = {0.0f, 0.0f, static_cast<float>(m_uiShadowMapResolution), static_cast<float>(m_uiShadowMapResolution), 0.0f, 1.0f};
-    pContext->RSSetViewports(1, &NewViewPort);
+    mpContext->RSSetViewports(1, &NewViewPort);
 
     for(int iCascade = 0; iCascade < m_TerrainRenderParams.m_iNumShadowCascades; ++iCascade)
     {
@@ -1556,16 +1558,16 @@ void COutdoorLightScatteringSample::RenderShadowMap(ID3D11DeviceContext *pContex
         D3DXMATRIX WorldToShadowMapUVDepthMatr = WorldToLightProjSpaceMatr * projToUV;
         D3DXMatrixTranspose( &ShadowMapAttribs.mWorldToShadowMapUVDepthT[iCascade], &WorldToShadowMapUVDepthMatr );
 
-        pContext->OMSetRenderTargets(0, nullptr, m_pShadowMapDSVs[iCascade]);
-        pContext->ClearDepthStencilView(m_pShadowMapDSVs[iCascade], D3D11_CLEAR_DEPTH, 0.f, 0);
+        mpContext->OMSetRenderTargets(0, nullptr, m_pShadowMapDSVs[iCascade]);
+        mpContext->ClearDepthStencilView(m_pShadowMapDSVs[iCascade], D3D11_CLEAR_DEPTH, 0.f, 0);
 
         m_EarthHemisphere.Render(mpContext, m_CameraPos, WorldToLightProjSpaceMatr, nullptr, nullptr, nullptr, nullptr, nullptr, true);
 
         ShadowMapAttribs.fCascadeCamSpaceZEnd[iCascade] = cascadeZNearFar.x;
     }
 
-    pContext->OMSetRenderTargets(1, &pOrigRTV.p, pOrigDSV);
-    pContext->RSSetViewports(1, &OrigViewport);
+    mpContext->OMSetRenderTargets(1, &pOrigRTV.p, pOrigDSV);
+    mpContext->RSSetViewports(1, &OrigViewport);
 }
 
 static float GetMaxViewDisstance(float DisstToCamSqr, float EarthRadius, float MaxElevation)
@@ -1626,6 +1628,49 @@ static float AdjustNearPlane(float CameraElevation, float MaxRadius,  const D3DX
     return (CameraElevation - MaxRadius) / NearPlaneCornerVLen;
 }
 
+static float FindApproximateFarPlaneUsingRaytracing(const D3DXMATRIX &View, const D3DXMATRIX &Proj, const D3DXVECTOR3 &EarthCenter, float MinRadius, float MaxViewDistance)
+{
+    D3DXVECTOR3 EarthCenterV;
+    D3DXVec3TransformCoord(&EarthCenterV, &EarthCenter, &View);
+
+    D3DXMATRIX InvProj;
+    D3DXMatrixInverse(&InvProj, nullptr, &Proj);
+
+    float fFarPlaneZ = 1000.0f;
+
+    const int iNumTestDirections = 5;
+    for(int i=0; i<iNumTestDirections; ++i)
+        for(int j=0; j<iNumTestDirections; ++j)
+        {
+            D3DXVECTOR3 PosPS, PosV;
+            PosPS.x = (float)i / (float)(iNumTestDirections-1) * 2.f - 1.f;
+            PosPS.y = (float)j / (float)(iNumTestDirections-1) * 2.f - 1.f;
+            PosPS.z = 0; // Far plane is at 0 in complimentary depth buffer
+            D3DXVec3TransformCoord(&PosV, &PosPS, &InvProj);
+
+            D3DXVECTOR3 DirFromCamera;
+            D3DXVec3Normalize(&DirFromCamera, &PosV);
+
+            D3DXVECTOR2 IsecsWithBottomBoundSphere;
+            GetRaySphereIntersection(D3DXVECTOR3(0.0f, 0.0f, 0.0f), DirFromCamera, EarthCenterV, MinRadius, IsecsWithBottomBoundSphere);
+
+            float fNearIsecWithBottomSphere = IsecsWithBottomBoundSphere.x > 0 ? IsecsWithBottomBoundSphere.x : IsecsWithBottomBoundSphere.y;
+            if( fNearIsecWithBottomSphere > 0 )
+            {
+                // The ray hits the Earth. Use hit point to compute camera space Z
+                D3DXVECTOR3 HitPointV = DirFromCamera*fNearIsecWithBottomSphere;
+                fFarPlaneZ = max(fFarPlaneZ, HitPointV.z);
+            }
+            else
+            {
+                // The ray misses the Earth. In that case the whole earth could be seen
+                fFarPlaneZ = MaxViewDistance;
+            }
+        }
+
+    return fFarPlaneZ;
+}
+
 void ComputeApproximateNearFarPlaneDist(const D3DXVECTOR3 &CameraPos,
                                         const D3DXMATRIX &ViewMatr,
                                         const D3DXMATRIX &ProjMatr, 
@@ -1651,39 +1696,7 @@ void ComputeApproximateNearFarPlaneDist(const D3DXVECTOR3 &CameraPos,
         fNearPlaneZ = AdjustNearPlane(fCameraElev, fMaxRadius, ProjMatr);
 
     fNearPlaneZ = max(fNearPlaneZ, 50);
-    fFarPlaneZ = 1000;
-    
-    const int iNumTestDirections = 5;
-    for(int i=0; i<iNumTestDirections; ++i)
-        for(int j=0; j<iNumTestDirections; ++j)
-        {
-            D3DXVECTOR3 PosPS, PosWS, DirFromCamera;
-            PosPS.x = (float)i / (float)(iNumTestDirections-1) * 2.f - 1.f;
-            PosPS.y = (float)j / (float)(iNumTestDirections-1) * 2.f - 1.f;
-            PosPS.z = 0; // Far plane is at 0 in complimentary depth buffer
-            D3DXVec3TransformCoord(&PosWS, &PosPS, &ViewProjInv);
-
-            DirFromCamera = PosWS - CameraPos;
-            D3DXVec3Normalize(&DirFromCamera, &DirFromCamera);
-
-            D3DXVECTOR2 IsecsWithBottomBoundSphere;
-            GetRaySphereIntersection(CameraPos, DirFromCamera, EarthCenter, fMinRadius, IsecsWithBottomBoundSphere);
-
-            float fNearIsecWithBottomSphere = IsecsWithBottomBoundSphere.x > 0 ? IsecsWithBottomBoundSphere.x : IsecsWithBottomBoundSphere.y;
-            if( fNearIsecWithBottomSphere > 0 )
-            {
-                // The ray hits the Earth. Use hit point to compute camera space Z
-                D3DXVECTOR3 HitPointWS = CameraPos + DirFromCamera*fNearIsecWithBottomSphere;
-                D3DXVECTOR3 HitPointCamSpace;
-                D3DXVec3TransformCoord(&HitPointCamSpace, &HitPointWS, &ViewMatr);
-                fFarPlaneZ = max(fFarPlaneZ, HitPointCamSpace.z);
-            }
-            else
-            {
-                // The ray misses the Earth. In that case the whole earth could be seen
-                fFarPlaneZ = fMaxViewDistance;
-            }
-        }
+    fFarPlaneZ = FindApproximateFarPlaneUsingRaytracing(ViewMatr, ProjMatr, EarthCenter, fMinRadius, fMaxViewDistance);
 }
 
 //-----------------------------------------------------------------------------
@@ -1769,6 +1782,48 @@ static D3DXVECTOR2 ProjToUV(const D3DXVECTOR2& f2ProjSpaceXY)
     return D3DXVECTOR2(0.5f + 0.5f*f2ProjSpaceXY.x, 0.5f - 0.5f*f2ProjSpaceXY.y);
 }
 
+static D3DXVECTOR4 GetDirOnLightN(const D3DXVECTOR4 &DirOnLightW, const D3DXMATRIX &ViewProj)
+{
+    D3DXVECTOR4 lightPosN;
+    D3DXVec4Transform(&lightPosN, &DirOnLightW, &ViewProj);
+
+    lightPosN.x /= lightPosN.w;
+    lightPosN.y /= lightPosN.w;
+    lightPosN.z /= lightPosN.w;
+
+    float fDistToLightOnScreen = D3DXVec2Length( (D3DXVECTOR2*)&lightPosN );
+    float fMaxDist = 100.0f;
+
+    if( fDistToLightOnScreen > fMaxDist )
+        fMaxDist *= fMaxDist/fDistToLightOnScreen;
+
+    return lightPosN;
+}
+
+SLightAttribs COutdoorLightScatteringSample::UpdateLightAttributes(const SShadowMapAttribs &ShadowAttribs)
+{
+    D3DXMATRIX mViewProj = m_CameraViewMatrix * m_CameraProjMatrix;
+
+    D3DXVECTOR3 v3DirOnLight = (D3DXVECTOR3&)m_pDirLightOrienationCamera->GetLook();
+
+    SLightAttribs LightAttribs;
+    LightAttribs.ShadowAttribs = ShadowAttribs;
+    LightAttribs.ShadowAttribs.bVisualizeCascades = ((CPUTCheckbox*)CPUTGetGuiController()->GetControl(ID_SHOW_CASCADES_CHECK))->GetCheckboxState() == CPUT_CHECKBOX_CHECKED;
+    LightAttribs.f4DirOnLight = D3DXVECTOR4( v3DirOnLight.x, v3DirOnLight.y, v3DirOnLight.z, 0 );
+    LightAttribs.f4LightScreenPos = GetDirOnLightN(LightAttribs.f4DirOnLight, mViewProj);
+    LightAttribs.f4ExtraterrestrialSunColor = D3DXVECTOR4(10.0f, 10.0f, 10.0f, 10.0f) * m_fScatteringScale;
+
+    // Note that in fact the outermost visible screen pixels do not lie exactly on the boundary (+1 or -1), but are biased by
+    // 0.5 screen pixel size inwards. Using these adjusted boundaries improves precision and results in
+    // smaller number of pixels which require inscattering correction
+    LightAttribs.bIsLightOnScreen = abs(LightAttribs.f4LightScreenPos.x) <= 1.f - 1.f/(float)m_uiBackBufferWidth && 
+                                    abs(LightAttribs.f4LightScreenPos.y) <= 1.f - 1.f/(float)m_uiBackBufferHeight;
+
+    UpdateConstantBuffer(mpContext, m_pcbLightAttribs, &LightAttribs, sizeof(LightAttribs));
+
+    return LightAttribs;
+}
+
 // DirectX 11 render callback
 //-----------------------------------------------------------------------------
 void COutdoorLightScatteringSample::Render(double deltaSeconds)
@@ -1781,11 +1836,6 @@ void COutdoorLightScatteringSample::Render(double deltaSeconds)
 
     CPUTRenderParametersDX drawParams(mpContext);
 
-    // Get the camera position
-    D3DXMATRIX CameraWorld;
-    D3DXMatrixInverse(&CameraWorld, NULL, &m_CameraViewMatrix);
-    D3DXVECTOR3 CameraPos = *(D3DXVECTOR3*)&CameraWorld._41;
-
     D3DXVECTOR3 v3DirOnLight = (D3DXVECTOR3&)m_pDirLightOrienationCamera->GetLook();
 
     CPUTGuiControllerDX11* pGUI = CPUTGetGuiController();
@@ -1795,35 +1845,11 @@ void COutdoorLightScatteringSample::Render(double deltaSeconds)
     m_PPAttribs.m_fFirstCascade = (float)m_PPAttribs.m_iFirstCascade;
 
     SShadowMapAttribs shadowMapAttribs;
-	RenderShadowMap(mpContext, shadowMapAttribs, v3DirOnLight);
-    
-    SLightAttribs LightAttribs;
-    LightAttribs.ShadowAttribs = shadowMapAttribs;
-    LightAttribs.f4DirOnLight = D3DXVECTOR4( v3DirOnLight.x, v3DirOnLight.y, v3DirOnLight.z, 0 );
-    LightAttribs.f4ExtraterrestrialSunColor = D3DXVECTOR4(10.0f, 10.0f, 10.0f, 10.0f) * m_fScatteringScale;
-    LightAttribs.ShadowAttribs.bVisualizeCascades = ((CPUTCheckbox*)pGUI->GetControl(ID_SHOW_CASCADES_CHECK))->GetCheckboxState() == CPUT_CHECKBOX_CHECKED;
+	RenderShadowMap(shadowMapAttribs);
+
+    SLightAttribs lightAttribs = UpdateLightAttributes(shadowMapAttribs);
 
     D3DXMATRIX mViewProj = m_CameraViewMatrix * m_CameraProjMatrix;
-
-    // Calculate location of the sun on the screen
-    D3DXVECTOR4 &f4LightPosPS = LightAttribs.f4LightScreenPos;
-    D3DXVec4Transform(&f4LightPosPS, &LightAttribs.f4DirOnLight, &mViewProj);
-
-    f4LightPosPS.x /= f4LightPosPS.w;
-    f4LightPosPS.y /= f4LightPosPS.w;
-    f4LightPosPS.z /= f4LightPosPS.w;
-    float fDistToLightOnScreen = D3DXVec2Length( (D3DXVECTOR2*)&f4LightPosPS );
-    float fMaxDist = 100;
-    if( fDistToLightOnScreen > fMaxDist )
-        (D3DXVECTOR2&)f4LightPosPS *= fMaxDist/fDistToLightOnScreen;
-
-    // Note that in fact the outermost visible screen pixels do not lie exactly on the boundary (+1 or -1), but are biased by
-    // 0.5 screen pixel size inwards. Using these adjusted boundaries improves precision and results in
-    // smaller number of pixels which require inscattering correction
-    LightAttribs.bIsLightOnScreen = abs(f4LightPosPS.x) <= 1.f - 1.f/(float)m_uiBackBufferWidth && 
-                                    abs(f4LightPosPS.y) <= 1.f - 1.f/(float)m_uiBackBufferHeight;
-
-    UpdateConstantBuffer(mpContext, m_pcbLightAttribs, &LightAttribs, sizeof(LightAttribs));
 
     if( m_bEnableLightScattering )
     {
@@ -1836,7 +1862,6 @@ void COutdoorLightScatteringSample::Render(double deltaSeconds)
         mpContext->ClearDepthStencilView(mpDepthStencilView, D3D11_CLEAR_DEPTH, 0.0f, 0);   
     }
 
-    
     // Render terrain
     ID3D11Buffer *pcMediaScatteringParams = m_pLightSctrPP->GetMediaAttribsCB();
     ID3D11ShaderResourceView *pPrecomputedNetDensitySRV = m_pLightSctrPP->GetPrecomputedNetDensitySRV();
@@ -1853,7 +1878,7 @@ void COutdoorLightScatteringSample::Render(double deltaSeconds)
         FrameAttribs.pd3dDevice = mpD3dDevice;
         FrameAttribs.pd3dDeviceContext = mpContext;
         FrameAttribs.dElapsedTime = deltaSeconds;
-        FrameAttribs.pLightAttribs = &LightAttribs;
+        FrameAttribs.pLightAttribs = &lightAttribs;
 
         m_PPAttribs.m_iNumCascades = m_TerrainRenderParams.m_iNumShadowCascades;
         m_PPAttribs.m_fNumCascades = (float)m_TerrainRenderParams.m_iNumShadowCascades;
@@ -1862,7 +1887,7 @@ void COutdoorLightScatteringSample::Render(double deltaSeconds)
         CPUTSlider* pSlider = static_cast<CPUTSlider*>(pGUI->GetControl(ID_REFINEMENT_THRESHOLD));
         pSlider->GetValue(m_PPAttribs.m_fRefinementThreshold);
 
-        FrameAttribs.CameraAttribs.f4CameraPos = D3DXVECTOR4(CameraPos.x, CameraPos.y, CameraPos.z, 0);            ///< Camera world position
+        FrameAttribs.CameraAttribs.f4CameraPos = D3DXVECTOR4(m_CameraPos.x, m_CameraPos.y, m_CameraPos.z, 0);            ///< Camera world position
         FrameAttribs.CameraAttribs.fNearPlaneZ = mpCamera->GetNearPlaneDistance();
         FrameAttribs.CameraAttribs.fFarPlaneZ  = mpCamera->GetFarPlaneDistance() * 0.999999f;
         D3DXMatrixTranspose( &FrameAttribs.CameraAttribs.mViewT, &m_CameraViewMatrix);
