@@ -36,6 +36,7 @@
 
 #include "EarthHemisphere.h"
 #include "ElevationDataSource.h"
+#include "LightSctrPostProcess.h"
 
 struct FrameConstantBuffer
 {
@@ -138,6 +139,10 @@ public:
     void CalculateCascadeRange(int Cascade, const D3DXMATRIX &CascadeFrustumProjSpaceToLightSpace, D3DXVECTOR3 &MinXYZ, D3DXVECTOR3 &MaxXYZ);
     void FillCascadeAttributes(SCascadeAttribs &CascadeAttribs, int CacadeInd,  const D3DXMATRIX &CascadeProj, const D3DXVECTOR2 &CascadeZNearFar);
     SLightAttribs UpdateLightAttributes(const SShadowMapAttribs &ShadowAttribs);
+    void UpdatePostProcessingAttribs();
+    void UpdateCameraPos(float deltaSeconds);
+    void CorrectCameraNearAndFarPalens();
+    SFrameAttribs GetFrameAttributes(float deltaSeconds, SLightAttribs *LightAttribs);
 
     void Shutdown();
 
@@ -203,6 +208,7 @@ private:
 
     D3DXMATRIX  m_CameraViewMatrix;
     D3DXMATRIX  m_CameraProjMatrix;
+    D3DXMATRIX  m_CameraViewProjMatrix;
 	D3DXVECTOR3 m_CameraPos;
 
     CComPtr<ID3D11Buffer> m_pcbLightAttribs;
