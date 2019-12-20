@@ -342,16 +342,21 @@ void GenerateSphereGeometry(ID3D11Device *pDevice,
                 float fDirectionScale = 1;
                 if( f3Pos.x != 0 || f3Pos.z != 0 )
                 {
+                    //see https://socratic.org/questions/how-do-you-simplify-sqrt-1-tan-2x
                     float fDX = abs(f3Pos.x);
                     float fDZ = abs(f3Pos.z);
                     float fMaxD = max(fDX, fDZ);
                     float fMinD = min(fDX, fDZ);
                     float fTan = fMinD/fMaxD;
-                    fDirectionScale = 1 / sqrt(1 + fTan*fTan);
+
+                    float secAbs = sqrt(1 + fTan*fTan);
+
+                    fDirectionScale = 1 / secAbs;
                 }
-            
-                f3Pos.x *= fDirectionScale*fGridScale;
-                f3Pos.z *= fDirectionScale*fGridScale;
+
+                f3Pos.x *= fDirectionScale * fGridScale;
+                f3Pos.z *= fDirectionScale * fGridScale;
+
                 f3Pos.y = sqrt( max(0, 1 - (f3Pos.x*f3Pos.x + f3Pos.z*f3Pos.z)) );
 
                 f3Pos.x *= fEarthRadius;
@@ -860,12 +865,6 @@ HRESULT CEarthHemsiphere::OnD3D11CreateDevice( class CElevationDataSource *pData
     HRESULT hr;
     m_Params = Params;
 
-    const UINT16 *pHeightMap;
-    size_t HeightMapPitch;
-    pDataSource->GetDataPtr(pHeightMap, HeightMapPitch);
-    int iHeightMapDim = pDataSource->GetNumCols();
-    assert(iHeightMapDim == pDataSource->GetNumRows() );
-
     std::vector<SHemisphereVertex> VB;
     std::vector<UINT> StitchIB;
     GenerateSphereGeometry(pd3dDevice, SAirScatteringAttribs().fEarthRadius, m_Params.m_iRingDimension, m_Params.m_iNumRings, pDataSource, m_Params.m_TerrainAttribs.m_fElevationSamplingInterval, m_Params.m_TerrainAttribs.m_fElevationScale, VB, StitchIB, m_SphereMeshes);
@@ -906,6 +905,12 @@ HRESULT CEarthHemsiphere::OnD3D11CreateDevice( class CElevationDataSource *pData
 	m_RenderEarthHemisphereZOnlyTech.SetRS( m_pRSZOnlyPass );
 	m_RenderEarthHemisphereZOnlyTech.SetBS( m_pDefaultBS );
     
+    const UINT16 *pHeightMap;
+    size_t HeightMapPitch;
+    pDataSource->GetDataPtr(pHeightMap, HeightMapPitch);
+    int iHeightMapDim = pDataSource->GetNumCols();
+    assert(iHeightMapDim == pDataSource->GetNumRows() );
+
     RenderNormalMap(pd3dDevice, pd3dImmediateContext, pHeightMap, HeightMapPitch, iHeightMapDim);
 
     D3DX11CreateShaderResourceViewFromFile(pd3dDevice, MaterialMaskPath, nullptr, nullptr, &m_ptex2DMtrlMaskSRV, nullptr);

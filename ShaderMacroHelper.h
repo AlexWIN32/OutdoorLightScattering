@@ -58,7 +58,7 @@ public:
         m_bIsFinalized = true;
 	}
 
-	operator const D3D_SHADER_MACRO* ()
+	operator const D3D_SHADER_MACRO* () const
 	{
         assert( !m_Macroes.size() || m_bIsFinalized );
         if( m_Macroes.size() && !m_bIsFinalized )

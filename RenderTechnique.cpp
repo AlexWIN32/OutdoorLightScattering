@@ -119,7 +119,7 @@ HRESULT CRenderTechnique::CreateGeometryShaderFromFile(LPCTSTR strFilePath,
 }
 
 HRESULT CRenderTechnique::CreatePixelShaderFromFile(LPCTSTR strFilePath, 
-                                                     LPSTR strFunctionName,
+                                                     LPCTSTR strFunctionName,
                                                      const D3D_SHADER_MACRO* pDefines)
 {
     CComPtr<ID3DBlob> pShaderByteCode;
