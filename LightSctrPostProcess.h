@@ -20,7 +20,7 @@
 #include <D3DX10math.h>
 
 #include "RenderTechnique.h"
-
+#include "ShaderMacroHelper.h"
 #include "structures.fxh"
 struct SFrameAttribs
 {
@@ -95,8 +95,11 @@ private:
     void CreateLowResLuminanceTexture(ID3D11Device *pDevice);
     void CreateAmbientSkyLightTexture(ID3D11Device *pDevice, ID3D11DeviceContext *pContext);
 
-    void DefineMacros(class CD3DShaderMacroHelper &Macros);
-    
+    CD3DShaderMacroHelper DefineMacros(bool Finite = true);
+    void ProcessSettingsChanges(const SFrameAttribs &FrameAttribs, const SPostProcessingAttribs &PPAttribs);
+    void ReleaseRenderTecniques();
+    void CheckTextures(const SFrameAttribs &FrameAttribs, const SPostProcessingAttribs &PPAttribs);
+
     SPostProcessingAttribs m_PostProcessingAttribs;
     bool m_bUseCombinedMinMaxTexture;
     UINT m_uiSampleRefinementCSThreadGroupSize;

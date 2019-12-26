@@ -218,7 +218,7 @@ struct SPostProcessingAttribs
         m_bShowDepthBreaks(FALSE),
         m_bShowLightingOnly(FALSE),
         m_bOptimizeSampleLocations(TRUE),
-        m_bEnableLightShafts(TRUE),
+        m_bEnableLightShafts(FALSE),
         m_uiInstrIntegralSteps(30),
         m_bUse1DMinMaxTree(TRUE),
         m_fMaxShadowMapStep(16.f),

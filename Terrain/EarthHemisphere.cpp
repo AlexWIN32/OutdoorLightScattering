@@ -342,12 +342,17 @@ void GenerateSphereGeometry(ID3D11Device *pDevice,
                 float fDirectionScale = 1;
                 if( f3Pos.x != 0 || f3Pos.z != 0 )
                 {
+                    //see https://socratic.org/questions/how-do-you-simplify-sqrt-1-tan-2x
                     float fDX = abs(f3Pos.x);
                     float fDZ = abs(f3Pos.z);
                     float fMaxD = max(fDX, fDZ);
                     float fMinD = min(fDX, fDZ);
                     float fTan = fMinD/fMaxD;
-                    fDirectionScale = 1 / sqrt(1 + fTan*fTan);
+
+                    float secAbs = sqrt(1 + fTan*fTan);
+
+                    fDirectionScale = 1 / secAbs;
+
                 }
             
                 f3Pos.x *= fDirectionScale*fGridScale;
