@@ -195,6 +195,7 @@
     <ClInclude Include="Terrain\ElevationDataSource.h" />
     <ClInclude Include="Terrain\Errors.h" />
     <ClInclude Include="Terrain\HierarchyArray.h" />
+    <ClInclude Include="Texture.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="LightSctrPostProcess.cpp" />
@@ -209,6 +210,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="Texture.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="OutdoorLightScattering_2010.rc" />

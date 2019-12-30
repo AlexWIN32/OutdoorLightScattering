@@ -20,7 +20,7 @@
 #include <D3DX10math.h>
 
 #include "RenderTechnique.h"
-
+#include "ShaderMacroHelper.h"
 #include "structures.fxh"
 struct SFrameAttribs
 {
