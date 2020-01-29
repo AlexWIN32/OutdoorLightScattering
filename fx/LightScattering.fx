@@ -2341,6 +2341,28 @@ float3 GetExtinction(in float3 f3StartPos, in float3 f3EndPos)
 
 float GetCosHorizonAnlge(float fHeight)
 {
+    // First we need to find disstance to horizon point. This could be done using the Pythagorean theorem
+    // We will use right triangle with disstance to viewer (radius + height) as hypotenuse and radius as one of the cathetus
+    // Formula will be:
+    //
+    // (R + h)^2 = R^2 + d^2
+    //
+    // with solving for d:
+    //
+    // R^2 + 2*R*h + h^2 = R^2 + d^2
+    // 2*R*h + h^2 = d^2
+    // h*(2*R + h) = d^2
+    // sqrt(h*(2*R + h)) = d
+    //
+    // Next we need to find cos of an inner angle 
+    // cos(angle) = adjcatet / hypo 
+    // cos(angle) = d / (R + h)
+    // cos(angle) = sqrt(h*(2*R + h)) / (R + h)
+    //
+    //useful liks:
+    //https://en.wikipedia.org/wiki/Horizon
+    //https://gis.stackexchange.com/questions/4690/determine-angle-down-to-horizon-from-different-flight-altitudes
+
     // Due to numeric precision issues, fHeight might sometimes be slightly negative
     fHeight = max(fHeight, 0);
     return -sqrt(fHeight * (2*EARTH_RADIUS + fHeight) ) / (EARTH_RADIUS + fHeight);
@@ -2402,6 +2424,14 @@ float TexCoord2ZenithAngle(float fTexCoord, float fHeight, in float fTexDim, flo
     if( fTexCoord > 0.5 )
     {
         // Remap to [0,1] from the upper half of the texture [0.5 + 0.5/fTexDim, 1 - 0.5/fTexDim]
+        //(fTexCoord - (0.5f + 0.5f / fTexDim)) / ((1 - 0.5/fTexDim) - (0.5 + 0.5/fTexDim))
+        //(fTexCoord - (0.5f + 0.5f / fTexDim)) / (0.5 - 1/fTexDim)
+        //(fTexCoord - (0.5f + 0.5f / fTexDim)) / ((1/2) - 1/fTexDim)
+        //(fTexCoord - (0.5f + 0.5f / fTexDim)) / ((fTexDim - 2) / (2*fTexDim))
+        //(fTexCoord - (0.5f + 0.5f / fTexDim)) * ((2*fTexDim)/(fTexDim - 2))
+        //(fTexCoord - (0.5f + 0.5f / fTexDim)) * ((2*fTexDim)/((fTexDim/2) - 1)*2)
+        //(fTexCoord - (0.5f + 0.5f / fTexDim)) * (fTexDim/((fTexDim/2) - 1))
+        
         fTexCoord = saturate( (fTexCoord - (0.5f + 0.5f / fTexDim)) * fTexDim / (fTexDim/2 - 1) );
         fTexCoord = pow(fTexCoord, 1/power);
         // Assure that the ray does NOT hit Earth
@@ -2413,7 +2443,7 @@ float TexCoord2ZenithAngle(float fTexCoord, float fHeight, in float fTexDim, flo
         fTexCoord = saturate((fTexCoord - 0.5f / fTexDim) * fTexDim / (fTexDim/2 - 1));
         fTexCoord = pow(fTexCoord, 1/power);
         // Assure that the ray DOES hit Earth
-        fCosZenithAngle = min( (fCosHorzAngle - fTexCoord * (fCosHorzAngle - (-1))), fCosHorzAngle - 1e-4);
+        fCosZenithAngle = min( (fCosHorzAngle + fTexCoord * ((-1) - fCosHorzAngle)), fCosHorzAngle - 1e-4);
     }
     return fCosZenithAngle;
 }
@@ -2529,6 +2559,8 @@ float3 ComputeViewDir(in float fCosViewZenithAngle)
 
 float3 ComputeLightDir(in float3 f3ViewDir, in float fCosSunZenithAngle, in float fCosSunViewAngle)
 {
+    //float3(sqrt(saturate(1 - fCosViewZenithAngle*fCosViewZenithAngle)), fCosViewZenithAngle, 0)
+
     float3 f3DirOnLight;
     f3DirOnLight.x = (f3ViewDir.x > 0) ? (fCosSunViewAngle - fCosSunZenithAngle * f3ViewDir.y) / f3ViewDir.x : 0;
     f3DirOnLight.y = fCosSunZenithAngle;
@@ -2550,8 +2582,10 @@ float3 PrecomputeSingleScatteringPS(SScreenSizeQuadVSOutput In) : SV_Target
 {
     // Get attributes for the current point
     float2 f2UV = ProjToUV(In.m_f2PosPS);
+
     float fHeight, fCosViewZenithAngle, fCosSunZenithAngle, fCosSunViewAngle;
     InsctrLUTCoords2WorldParams(float4(f2UV, g_MiscParams.f2WQ), fHeight, fCosViewZenithAngle, fCosSunZenithAngle, fCosSunViewAngle );
+
     float3 f3EarthCentre =  - float3(0,1,0) * EARTH_RADIUS;
     float3 f3RayStart = float3(0, fHeight, 0);
     float3 f3ViewDir = ComputeViewDir(fCosViewZenithAngle);

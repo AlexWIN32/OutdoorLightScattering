@@ -546,14 +546,17 @@ HRESULT CLightSctrPostProcess :: CreatePrecomputedScatteringLUT(ID3D11Device *pD
 {
     HRESULT hr;
 
+    CRenderTechnique defTec;
+    defTec.SetDeviceAndContext(pDevice, pContext);
+    defTec.SetVS( m_pGenerateScreenSizeQuadVS );
+    defTec.SetDS( m_pDisableDepthTestDS );
+    defTec.SetRS( m_pSolidFillNoCullRS );
+    defTec.SetBS( m_pDefaultBS );
+
     if( !m_PrecomputeSingleSctrTech.IsValid() )
     {
-        m_PrecomputeSingleSctrTech.SetDeviceAndContext(pDevice, pContext);
+        m_PrecomputeSingleSctrTech = defTec;
         m_PrecomputeSingleSctrTech.CreatePixelShaderFromFile( m_strEffectPath, "PrecomputeSingleScatteringPS", DefineMacros());
-        m_PrecomputeSingleSctrTech.SetVS( m_pGenerateScreenSizeQuadVS );
-        m_PrecomputeSingleSctrTech.SetDS( m_pDisableDepthTestDS );
-        m_PrecomputeSingleSctrTech.SetRS( m_pSolidFillNoCullRS );
-        m_PrecomputeSingleSctrTech.SetBS( m_pDefaultBS );
     }
     
     if( !m_ComputeSctrRadianceTech.IsValid() )
@@ -561,34 +564,21 @@ HRESULT CLightSctrPostProcess :: CreatePrecomputedScatteringLUT(ID3D11Device *pD
         CD3DShaderMacroHelper Macros = DefineMacros(false);
         Macros.AddShaderMacro( "NUM_RANDOM_SPHERE_SAMPLES", sm_iNumRandomSamplesOnSphere );
         Macros.Finalize();
-        m_ComputeSctrRadianceTech.SetDeviceAndContext(pDevice, pContext);
+        m_ComputeSctrRadianceTech = defTec;
         m_ComputeSctrRadianceTech.CreatePixelShaderFromFile( m_strEffectPath, "ComputeSctrRadiancePS", Macros );
-        m_ComputeSctrRadianceTech.SetVS( m_pGenerateScreenSizeQuadVS );
-        m_ComputeSctrRadianceTech.SetDS( m_pDisableDepthTestDS );
-        m_ComputeSctrRadianceTech.SetRS( m_pSolidFillNoCullRS );
-        m_ComputeSctrRadianceTech.SetBS( m_pDefaultBS );
     }
     
     if( !m_ComputeScatteringOrderTech.IsValid() )
     {
-        m_ComputeScatteringOrderTech.SetDeviceAndContext(pDevice, pContext);
+        m_ComputeScatteringOrderTech = defTec;
         m_ComputeScatteringOrderTech.CreatePixelShaderFromFile( m_strEffectPath, "ComputeScatteringOrderPS", DefineMacros() );
-        m_ComputeScatteringOrderTech.SetVS( m_pGenerateScreenSizeQuadVS );
-        m_ComputeScatteringOrderTech.SetDS( m_pDisableDepthTestDS );
-        m_ComputeScatteringOrderTech.SetRS( m_pSolidFillNoCullRS );
-        m_ComputeScatteringOrderTech.SetBS( m_pDefaultBS );
     }
 
     if( !m_AddScatteringOrderTech.IsValid() )
     {
-        m_AddScatteringOrderTech.SetDeviceAndContext(pDevice, pContext);
+        m_AddScatteringOrderTech = defTec;
         m_AddScatteringOrderTech.CreatePixelShaderFromFile( m_strEffectPath, "AddScatteringOrderPS", DefineMacros() );
-        m_AddScatteringOrderTech.SetVS( m_pGenerateScreenSizeQuadVS );
-        m_AddScatteringOrderTech.SetDS( m_pDisableDepthTestDS );
-        m_AddScatteringOrderTech.SetRS( m_pSolidFillNoCullRS );
-        m_AddScatteringOrderTech.SetBS( m_pAdditiveBlendBS );
     }
-        
 
     if( !m_ptex2DSphereRandomSamplingSRV )
         CreateRandomSphereSamplingTexture(pDevice);
@@ -617,6 +607,7 @@ HRESULT CLightSctrPostProcess :: CreatePrecomputedScatteringLUT(ID3D11Device *pD
     V_RETURN(pDevice->CreateShaderResourceView(ptex3DHighOrderSctr, NULL, &m_ptex3DHighOrderScatteringSRV));
     V_RETURN(pDevice->CreateTexture3D(&PrecomputedSctrTexDesc, NULL, &ptex3DMultipleSctr));
     V_RETURN(pDevice->CreateShaderResourceView(ptex3DMultipleSctr, NULL, &m_ptex3DMultipleScatteringSRV));
+
     std::vector< CComPtr<ID3D11RenderTargetView> > ptex3DHighOrderSctrRTVs(PrecomputedSctrTexDesc.Depth);
     std::vector< CComPtr<ID3D11RenderTargetView> > ptex3DMultipleSctrRTVs(PrecomputedSctrTexDesc.Depth);
 
@@ -651,10 +642,13 @@ HRESULT CLightSctrPostProcess :: CreatePrecomputedScatteringLUT(ID3D11Device *pD
         SMiscDynamicParams MiscDynamicParams = {NULL};
         UINT uiW = uiDepthSlice % sm_iPrecomputedSctrWDim;
         UINT uiQ = uiDepthSlice / sm_iPrecomputedSctrWDim;
+
         MiscDynamicParams.f2WQ.x = ((float)uiW + 0.5f) / (float)sm_iPrecomputedSctrWDim;
-        assert(0 < MiscDynamicParams.f2WQ.x && MiscDynamicParams.f2WQ.x < 1);
         MiscDynamicParams.f2WQ.y = ((float)uiQ + 0.5f) / (float)sm_iPrecomputedSctrQDim;
+        
+        assert(0 < MiscDynamicParams.f2WQ.x && MiscDynamicParams.f2WQ.x < 1);
         assert(0 < MiscDynamicParams.f2WQ.y && MiscDynamicParams.f2WQ.y < 1);
+        
         UpdateConstantBuffer(pContext, m_pcbMiscParams, &MiscDynamicParams, sizeof(MiscDynamicParams));
         //cbuffer cbMiscDynamicParams : register( b4 )
         pContext->PSSetConstantBuffers(4, 1, &m_pcbMiscParams.p);
@@ -1589,6 +1583,15 @@ void CLightSctrPostProcess::ProcessSettingsChanges(const SFrameAttribs &FrameAtt
         PPAttribs.m_uiMultipleScatteringMode != m_PostProcessingAttribs.m_uiMultipleScatteringMode )
         m_RenderCoarseUnshadowedInsctrTech.Release();
 
+    // Note that in fact the outermost visible screen pixels do not lie exactly on the boundary (+1 or -1), but are biased by
+    // 0.5 screen pixel size inwards. Using these adjusted boundaries improves precision and results in
+    // smaller number of pixels which require inscattering correction
+    assert( FrameAttribs.pLightAttribs->bIsLightOnScreen == (abs(FrameAttribs.pLightAttribs->f4LightScreenPos.x) <= 1.f - 1.f/(float)m_uiBackBufferWidth && 
+                                                             abs(FrameAttribs.pLightAttribs->f4LightScreenPos.y) <= 1.f - 1.f/(float)m_uiBackBufferHeight) );
+
+    UpdateConstantBuffer(FrameAttribs.pd3dDeviceContext, m_pcbCameraAttribs, &FrameAttribs.CameraAttribs, sizeof(FrameAttribs.CameraAttribs));
+    UpdateConstantBuffer(FrameAttribs.pd3dDeviceContext, m_pcbPostProcessingAttribs, &PPAttribs, sizeof(PPAttribs));
+
     m_PostProcessingAttribs = PPAttribs;
     m_bUseCombinedMinMaxTexture = bUseCombinedMinMaxTexture;
 }
@@ -1636,15 +1639,6 @@ void CLightSctrPostProcess :: PerformPostProcessing(SFrameAttribs &FrameAttribs,
     ProcessSettingsChanges(FrameAttribs, PPAttribs);
 
     CheckTextures(FrameAttribs, PPAttribs);
-
-    // Note that in fact the outermost visible screen pixels do not lie exactly on the boundary (+1 or -1), but are biased by
-    // 0.5 screen pixel size inwards. Using these adjusted boundaries improves precision and results in
-    // smaller number of pixels which require inscattering correction
-    assert( FrameAttribs.pLightAttribs->bIsLightOnScreen == (abs(FrameAttribs.pLightAttribs->f4LightScreenPos.x) <= 1.f - 1.f/(float)m_uiBackBufferWidth && 
-                                                             abs(FrameAttribs.pLightAttribs->f4LightScreenPos.y) <= 1.f - 1.f/(float)m_uiBackBufferHeight) );
-
-    UpdateConstantBuffer(FrameAttribs.pd3dDeviceContext, m_pcbCameraAttribs, &FrameAttribs.CameraAttribs, sizeof(FrameAttribs.CameraAttribs));
-    UpdateConstantBuffer(FrameAttribs.pd3dDeviceContext, m_pcbPostProcessingAttribs, &m_PostProcessingAttribs, sizeof(m_PostProcessingAttribs));
     
     // Set constant buffers that will be used by all pixel shaders and compute shader
     ID3D11Buffer *pCBs[] = {m_pcbPostProcessingAttribs, m_pcbMediaAttribs, m_pcbCameraAttribs, FrameAttribs.pcbLightAttribs};
